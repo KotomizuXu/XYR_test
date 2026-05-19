@@ -20,7 +20,7 @@ class PlotAgent(BaseAgent):
         system = self.apply_style(self.system_prompt, style_guide)
         logger.info(f"Plotter: generating {num_chapters} chapter plans...")
         result = self.llm.chat_json(
-            system, user_msg, temperature=self._temperature(), max_tokens=8192
+            system, user_msg, temperature=self._temperature(), max_tokens=16384
         )
         if isinstance(result, dict) and "chapters" in result:
             result = result["chapters"]

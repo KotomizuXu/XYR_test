@@ -1,11 +1,22 @@
 """Base agent class."""
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from core.llm_client import LLMClient
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+# 各 Agent 需要的 style_guide 字段（未列出的 Agent 保留全量）
+STYLE_FIELDS = {
+    "director": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets"],
+    "plotter": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets"],
+    "writer": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets", "requirements"],
+    "reviewer": ["tone", "character", "worldbuilding", "review", "requirements", "setting"],
+    "editor": ["tone", "pacing", "character", "editing", "style_presets", "requirements"],
+    "critic": ["character", "worldbuilding", "setting", "requirements"],
+}
 
 
 class BaseAgent(ABC):
@@ -15,6 +26,7 @@ class BaseAgent(ABC):
         self.llm = llm
         self.config = config
         self.system_prompt = self._load_prompt()
+        self._temperature_override = None
 
     def _load_prompt(self) -> str:
         path = PROMPTS_DIR / self.PROMPT_TEMPLATE
@@ -25,13 +37,23 @@ class BaseAgent(ABC):
         return self.config.get("agents", {}).get(name, {})
 
     def _temperature(self) -> float:
+        if self._temperature_override is not None:
+            return self._temperature_override
         return self._agent_config().get("temperature", self.config["api"]["temperature"])
+
+    def set_temperature(self, temp: float):
+        self._temperature_override = temp
 
     def apply_style(self, prompt: str, style_guide: dict | None) -> str:
         if not style_guide:
             return prompt
-        import json
-        style_text = json.dumps(style_guide, ensure_ascii=False, indent=2)
+        agent_name = self.__class__.__name__.replace("Agent", "").lower()
+        fields = STYLE_FIELDS.get(agent_name)
+        if fields:
+            filtered = {k: v for k, v in style_guide.items() if k in fields}
+        else:
+            filtered = style_guide
+        style_text = json.dumps(filtered, ensure_ascii=False, indent=2)
         return f"{prompt}\n\n## 风格指南\n请严格遵循以下风格指南进行创作：\n{style_text}"
 
     @abstractmethod

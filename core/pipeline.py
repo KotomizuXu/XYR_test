@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from agents.critic import CriticAgent
 from agents.director import DirectorAgent
 from agents.editor import EditorAgent
 from agents.plotter import PlotAgent
@@ -17,6 +18,7 @@ from agents.writer import WriterAgent
 from core.context_manager import ContextManager
 from core.llm_client import LLMClient
 from core.state_manager import ChapterState, NovelState, StateManager
+from core.tracker import Tracker
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +43,36 @@ class NovelPipeline:
         self.reviewer = ReviewerAgent(self.llm, self.config)
         self.editor = EditorAgent(self.llm, self.config, self.ctx_mgr)
         self.style_advisor = StyleAdvisorAgent(self.llm, self.config)
+        self.critic = CriticAgent(self.llm, self.config)
 
         self._interrupted = False
         signal.signal(signal.SIGINT, self._handle_interrupt)
+
+    def _apply_style_temperatures(self, style_guide: dict):
+        if not style_guide or "agent_temperatures" not in style_guide:
+            return
+        agent_map = {
+            "director": self.director,
+            "plotter": self.plotter,
+            "writer": self.writer,
+            "reviewer": self.reviewer,
+            "editor": self.editor,
+            "style_advisor": self.style_advisor,
+        }
+        for name, temp in style_guide["agent_temperatures"].items():
+            if name in agent_map and isinstance(temp, (int, float)):
+                agent_map[name].set_temperature(float(temp))
 
     def _handle_interrupt(self, signum, frame):
         print("\n\n收到中断信号，正在保存进度...")
         self._interrupted = True
 
-    def start_new_novel(self, story_idea: str, novel_name: str, num_chapters: int = None, style: str | None = None) -> None:
-        if num_chapters is None:
-            num_chapters = self.config["novel"]["default_chapters"]
-
+    def start_new_novel(self, story_idea: str, novel_name: str, style: str | None = None) -> None:
         # Initialize state
         state = NovelState(
             novel_name=novel_name,
             story_idea=story_idea,
             phase="styling",
-            total_chapters=num_chapters,
             style_description=style,
         )
         self.state_mgr.ensure_dirs(novel_name)
@@ -67,7 +81,6 @@ class NovelPipeline:
         print(f"\n{'='*60}")
         print(f"开始创作《{novel_name}》")
         print(f"故事灵感：{story_idea}")
-        print(f"计划章节：{num_chapters}章")
         print(f"{'='*60}\n")
 
         try:
@@ -90,6 +103,8 @@ class NovelPipeline:
         print(f"当前章节：{state.current_chapter + 1}/{state.total_chapters}")
         print(f"{'='*60}\n")
 
+        self._apply_style_temperatures(state.style_guide)
+
         try:
             self._run_pipeline(state)
         except Exception as e:
@@ -103,10 +118,18 @@ class NovelPipeline:
         if state.phase == "styling":
             style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
             print(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
-            state.style_guide = self.style_advisor.run(style_desc)
-            state.phase = "directing"
+            state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
+            self._apply_style_temperatures(state.style_guide)
+            state.phase = "collecting_params"
             self.state_mgr.save(state)
             print(f"[风格顾问] 风格指南已生成：{state.style_guide.get('style_name', '?')}\n")
+
+        if self._interrupted:
+            return
+
+        # Phase 0.5: Collect params
+        if state.phase == "collecting_params":
+            self._collect_params(state)
 
         if self._interrupted:
             return
@@ -167,6 +190,16 @@ class NovelPipeline:
         if self._interrupted:
             return
 
+        # Phase 2.5: Initialize tracking system
+        if state.phase == "writing" and state.current_chapter == 0:
+            print("[追踪系统] 正在初始化追踪数据...")
+            tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+            tracker.init_tracking(state.world_data, state.outline, state.chapter_plans)
+            print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络）\n")
+
+        if self._interrupted:
+            return
+
         # Phase 3: Writing + Reviewing loop
         if state.phase in ("writing", "reviewing"):
             self._write_chapters(state)
@@ -188,8 +221,108 @@ class NovelPipeline:
             print(f"输出目录：output/{state.novel_name}/final/")
             print(f"{'='*60}")
 
+    def _collect_params(self, state: NovelState) -> None:
+        suggestions = (state.style_guide or {}).get("suggestions", {})
+        cfg = self.config["novel"]
+
+        # Defaults from config as fallback
+        default_chapters = cfg["default_chapters"]
+        default_min = cfg["words_per_chapter"]["min"]
+        default_max = cfg["words_per_chapter"]["max"]
+
+        # Style-based suggestions
+        sug_chapters = suggestions.get("total_chapters", {})
+        sug_words = suggestions.get("words_per_chapter", {})
+        pace_desc = suggestions.get("pace_description", "")
+        reward_desc = suggestions.get("reward_density", "")
+
+        rec_chapters = sug_chapters.get("recommended", default_chapters)
+        rec_min = sug_words.get("min", default_min)
+        rec_max = sug_words.get("max", default_max)
+        chapters_reason = sug_chapters.get("reason", "")
+        words_reason = sug_words.get("reason", "")
+
+        print(f"根据「{state.style_guide.get('style_name', '?')}」风格，以下是写作参数建议：\n")
+
+        if pace_desc:
+            print(f"  节奏建议：{pace_desc}")
+        if reward_desc:
+            print(f"  反馈密度：{reward_desc}")
+        print()
+
+        print(f"  总章数：建议 {rec_chapters} 章")
+        if chapters_reason:
+            print(f"     理由：{chapters_reason}")
+
+        print(f"  每章字数：建议 {rec_min}-{rec_max} 字")
+        if words_reason:
+            print(f"     理由：{words_reason}")
+        print()
+
+        # Collect user input
+        print("请确认或调整以下参数：\n")
+
+        chapters_input = input(f"  总章数（直接回车使用建议值 {rec_chapters}）：").strip()
+        total_chapters = int(chapters_input) if chapters_input else rec_chapters
+
+        min_input = input(f"  每章最少字数（直接回车使用建议值 {rec_min}）：").strip()
+        words_min = int(min_input) if min_input else rec_min
+
+        max_input = input(f"  每章最多字数（直接回车使用建议值 {rec_max}）：").strip()
+        words_max = int(max_input) if max_input else rec_max
+
+        state.total_chapters = total_chapters
+        state.novel_params = {
+            "total_chapters": total_chapters,
+            "words_per_chapter": {"min": words_min, "max": words_max},
+        }
+        state.phase = "directing"
+        self.state_mgr.save(state)
+
+        print(f"\n  确认参数：{total_chapters}章，{words_min}-{words_max}字/章\n")
+
+    def _get_words_range(self, state: NovelState) -> tuple[int, int]:
+        if state.novel_params and "words_per_chapter" in state.novel_params:
+            wp = state.novel_params["words_per_chapter"]
+            return wp["min"], wp["max"]
+        cfg = self.config["novel"]["words_per_chapter"]
+        return cfg["min"], cfg["max"]
+
+    def _report_forgotten(self, forgotten: dict) -> None:
+        print("  [遗忘检测] 发现以下元素需要关注：")
+        for char in forgotten.get("characters", []):
+            print(f"    ⚠️ 角色「{char['name']}」已{char['chapters_absent']}章未出场（上次：第{char['last_seen']}章）")
+        for plotline in forgotten.get("plotlines", []):
+            print(f"    ⚠️ 支线「{plotline['name']}」停滞中（状态：{plotline.get('status', '?')}）")
+        for fs in forgotten.get("foreshadowing", []):
+            content = fs.get('content', '')
+            print(f"    ⚠️ 伏笔「{content[:30]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
+
+    def _pre_write_check(self, state: NovelState, tracker: Tracker) -> None:
+        checks = {
+            "style_guide": state.style_guide is not None,
+            "world_data": bool(state.world_data),
+            "outline": bool(state.outline),
+            "chapter_plans": bool(state.chapter_plans),
+            "character_state": bool(tracker._read_json("character_state.json")),
+            "plot_tracker": bool(tracker._read_json("plot_tracker.json")),
+            "relationships": bool(tracker._read_json("relationships.json")),
+            "validation_rules": bool(tracker._read_json("validation_rules.json")),
+        }
+        missing = [k for k, v in checks.items() if not v]
+        if missing:
+            print(f"  [写前检查] ⚠️ 缺失数据：{missing}，继续写作但可能影响一致性")
+
+        # Report validation level
+        rules = tracker._read_json("validation_rules.json")
+        if rules:
+            strictness = tracker._get_strictness()
+            print(f"  [写前检查] 验证模式：{strictness}")
+
     def _write_chapters(self, state: NovelState) -> None:
         max_retries = self.config["novel"]["review_max_retries"]
+        words_min, words_max = self._get_words_range(state)
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
 
         for i in range(state.current_chapter, state.total_chapters):
             if self._interrupted:
@@ -201,15 +334,27 @@ class NovelPipeline:
 
             print(f"\n--- 第{ch_num}章：「{ch.title}」---")
 
+            # Pre-write checklist
+            self._pre_write_check(state, tracker)
+
+            # Pre-write checklist: build full context with tracking data
+            tracking_ctx = tracker.get_tracking_context(ch_num)
+
+            # Check forgotten elements
+            forgotten = tracker.check_forgotten(ch_num)
+            if forgotten:
+                self._report_forgotten(forgotten)
+
             # Build running context
             completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
             running_ctx = self.ctx_mgr.build_running_context(
-                state.world_data, state.outline, completed_summaries, plan
+                state.world_data, state.outline, completed_summaries, plan,
+                tracking_context=tracking_ctx,
             )
 
             # Write draft
             print(f"  [作家] 正在撰写...")
-            draft = self.writer.run(plan, running_ctx, style_guide=state.style_guide)
+            draft = self.writer.run(plan, running_ctx, style_guide=state.style_guide, words_min=words_min, words_max=words_max)
 
             # Save draft
             dirs = self.state_mgr.ensure_dirs(state.novel_name)
@@ -217,9 +362,24 @@ class NovelPipeline:
             draft_path.write_text(draft, encoding="utf-8")
             ch.draft_path = str(draft_path)
 
-            # Review loop
-            print(f"  [审核] 正在审稿...")
-            review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide)
+            # Programmatic checks: character name alias fix
+            fix_result = tracker.auto_fix(draft, ch_num)
+            if fix_result["fixes"]["applied"]:
+                draft = fix_result["text"]
+                print(f"  [追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
+
+            # Programmatic checks: banned AI words auto-fix
+            fixed_draft, banned_changes = tracker.auto_fix_banned_words(draft, state.style_guide)
+            if banned_changes:
+                draft = fixed_draft
+                print(f"  [禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
+
+            # Save auto-fixed draft
+            draft_path.write_text(draft, encoding="utf-8")
+
+            # Review with tracking context for consistency checking
+            print(f"  [审核] 正在审稿（含一致性校验）...")
+            review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide, tracking_context=tracking_ctx)
             ch.review_notes = json.dumps(review, ensure_ascii=False)
 
             # Save review report
@@ -237,19 +397,37 @@ class NovelPipeline:
                     f"- [{i.get('severity')}] {i.get('description')} → 建议：{i.get('suggestion')}"
                     for i in issues
                 )
-                draft = self.writer.rewrite(draft, feedback, plan, running_ctx, style_guide=state.style_guide)
+                draft = self.writer.rewrite(draft, feedback, plan, running_ctx, style_guide=state.style_guide, words_min=words_min, words_max=words_max)
 
                 draft_path = dirs["drafts"] / f"chapter_{ch_num:02d}_r{retries}.txt"
                 draft_path.write_text(draft, encoding="utf-8")
                 ch.draft_path = str(draft_path)
                 ch.revision_count = retries
 
-                review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide)
+                review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide, tracking_context=tracking_ctx)
                 ch.review_notes = json.dumps(review, ensure_ascii=False)
 
             if review.get("approved", False):
                 ch.review_status = "passed"
-                print(f"  [审核] 通过！质量评分：{review.get('overall_quality', '?')}/10")
+                print(f"  [审核] 通过！质量评分：{review.get('overall_quality', '?')}/10，一致性：{review.get('consistency_score', '?')}%")
+                consistency = review.get("consistency_checks", {})
+                if consistency:
+                    for key in ("character_issues", "world_issues", "timeline_issues",
+                                "physical_traits_issues", "personality_issues", "knowledge_state_issues"):
+                        issues = consistency.get(key, [])
+                        if issues:
+                            print(f"  [一致性] {key}：{issues}")
+                # Apply auto_fix_suggestions from reviewer
+                auto_fixes = review.get("auto_fix_suggestions", [])
+                if auto_fixes:
+                    applied = []
+                    for fix in auto_fixes:
+                        if fix.get("confidence", 0) >= 0.9 and fix.get("original") and fix.get("suggested"):
+                            draft = draft.replace(fix["original"], fix["suggested"])
+                            applied.append(f"'{fix['original']}' → '{fix['suggested']}'")
+                    if applied:
+                        draft_path.write_text(draft, encoding="utf-8")
+                        print(f"  [自动修复] 审核建议修复 {len(applied)} 处：{applied[:3]}")
             else:
                 ch.review_status = "needs_revision"
                 print(f"  [审核] 达到最大重试次数，接受当前版本")
@@ -257,6 +435,9 @@ class NovelPipeline:
             # Generate summary for context management
             summary = self.ctx_mgr.generate_chapter_summary(draft, ch_num)
             ch.summary = summary
+
+            # Update tracking data
+            tracker.update_tracking(ch_num, draft, plan)
 
             state.current_chapter = i + 1
             state.phase = "writing"
@@ -270,6 +451,7 @@ class NovelPipeline:
 
     def _edit_chapters(self, state: NovelState) -> None:
         dirs = self.state_mgr.ensure_dirs(state.novel_name)
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
 
         for i in range(state.current_chapter, state.total_chapters):
             if self._interrupted:
@@ -282,6 +464,9 @@ class NovelPipeline:
             # Read the final draft (may have been revised)
             draft_path = Path(ch.draft_path) if ch.draft_path else dirs["drafts"] / f"chapter_{ch_num:02d}.txt"
             draft = draft_path.read_text(encoding="utf-8")
+
+            # Get tracking context for consistency during editing
+            tracking_ctx = tracker.get_tracking_context(ch_num)
 
             # Get adjacent chapters for transition context
             prev_ending = ""
@@ -300,7 +485,7 @@ class NovelPipeline:
                 if next_draft.exists():
                     next_opening = next_draft.read_text(encoding="utf-8")
 
-            edited = self.editor.run(draft, ch_num, prev_ending, next_opening, style_guide=state.style_guide)
+            edited = self.editor.run(draft, ch_num, prev_ending, next_opening, style_guide=state.style_guide, tracking_context=tracking_ctx)
 
             edited_path = dirs["edited"] / f"chapter_{ch_num:02d}.txt"
             edited_path.write_text(edited, encoding="utf-8")
@@ -339,3 +524,257 @@ class NovelPipeline:
         full_path = final_dir / f"{state.novel_name}_全文.txt"
         full_path.write_text("\n".join(combined_parts), encoding="utf-8")
         print(f"  全文已合并保存至：{full_path}")
+
+    # ── Revise flow ──────────────────────────────────────────────
+
+    def revise_chapter(self, novel_name: str, chapter_number: int) -> None:
+        state = self.state_mgr.load(novel_name)
+        if state is None:
+            print(f"未找到小说《{novel_name}》，请检查名称")
+            return
+
+        ch = self._find_chapter(state, chapter_number)
+        if ch is None:
+            print(f"第{chapter_number}章不存在")
+            return
+
+        draft_path = Path(ch.edited_path) if ch.edited_path else (Path(ch.draft_path) if ch.draft_path else None)
+        if not draft_path or not draft_path.exists():
+            print(f"第{chapter_number}章尚未完成，无法修订")
+            return
+
+        draft = draft_path.read_text(encoding="utf-8")
+
+        print(f"\n--- 修订第{chapter_number}章：「{ch.title}」---")
+        print(f"当前版本：{len(draft)} 字")
+
+        try:
+            user_feedback = self._collect_user_feedback()
+        except (KeyboardInterrupt, EOFError):
+            print("\n已取消输入，退出修订")
+            return
+
+        if not user_feedback:
+            print("未输入修改意见，退出修订")
+            return
+
+        self._apply_style_temperatures(state.style_guide)
+
+        try:
+            tracker = Tracker(self.state_mgr.get_novel_dir(novel_name))
+            tracking_ctx = tracker.get_tracking_context(chapter_number)
+
+            chapter_plan = state.chapter_plans[chapter_number - 1] if state.chapter_plans else {}
+
+            print("  [修订顾问] 正在分析修改意见...")
+            ideas = self.critic.run(
+                chapter_text=draft,
+                user_feedback=user_feedback,
+                chapter_plan=chapter_plan,
+                world_data=state.world_data,
+                tracking_context=tracking_ctx,
+                style_guide=state.style_guide,
+            )
+
+            if self._interrupted:
+                return
+
+            try:
+                selected = self._select_idea(ideas, user_feedback)
+            except (KeyboardInterrupt, EOFError):
+                print("\n已取消选择，退出修订")
+                return
+
+            self._execute_revise(state, ch, draft, selected, user_feedback, chapter_plan, tracking_ctx)
+        except Exception as e:
+            logger.error(f"Revise error: {e}")
+            print(f"\n修订出错：{e}")
+            raise
+
+    def _execute_revise(self, state, ch, draft, selected_idea, user_feedback, chapter_plan, tracking_ctx):
+        ch_num = ch.chapter_number
+        words_min, words_max = self._get_words_range(state)
+
+        i = ch_num - 1
+        completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
+        running_ctx = self.ctx_mgr.build_running_context(
+            state.world_data, state.outline, completed_summaries, chapter_plan,
+            tracking_context=tracking_ctx,
+        )
+
+        if isinstance(selected_idea, dict):
+            feedback = (
+                f"## 修改方向：{selected_idea.get('title', '')}\n"
+                f"{selected_idea.get('description', '')}\n"
+                f"修改范围：{selected_idea.get('scope', '')}\n"
+                f"预期效果：{selected_idea.get('expected_effect', '')}\n\n"
+                f"用户原始意见：{user_feedback}"
+            )
+        else:
+            feedback = f"## 修改要求\n{selected_idea}"
+
+        # Step 1: Writer rewrite
+        print("  [作家] 正在根据修改思路修订...")
+        revised = self.writer.rewrite(
+            draft, feedback, chapter_plan, running_ctx,
+            style_guide=state.style_guide,
+            words_min=words_min, words_max=words_max,
+        )
+
+        if self._interrupted:
+            print("  已中断，修订未保存")
+            return
+
+        # Step 2: Review
+        print("  [审核] 正在审核修订版本...")
+        review = self.reviewer.run(
+            revised, chapter_plan, state.world_data,
+            style_guide=state.style_guide,
+            tracking_context=tracking_ctx,
+        )
+
+        if self._interrupted:
+            print("  已中断，修订未保存")
+            return
+
+        # Step 3: Retry once if major issues
+        if not review.get("approved", False):
+            major = [iss for iss in review.get("issues", []) if iss.get("severity") == "major"]
+            if major:
+                print(f"  [审核] 发现 {len(major)} 个主要问题，再次修订...")
+                additional = "\n".join(
+                    f"- [{iss.get('severity')}] {iss.get('description')} → {iss.get('suggestion')}"
+                    for iss in review.get("issues", [])
+                )
+                revised = self.writer.rewrite(
+                    revised, additional, chapter_plan, running_ctx,
+                    style_guide=state.style_guide,
+                    words_min=words_min, words_max=words_max,
+                )
+                review = self.reviewer.run(
+                    revised, chapter_plan, state.world_data,
+                    style_guide=state.style_guide,
+                    tracking_context=tracking_ctx,
+                )
+
+        if self._interrupted:
+            print("  已中断，修订未保存")
+            return
+
+        # Step 4: Editor polish
+        print("  [编辑] 正在润色修订版本...")
+        prev_ending, next_opening = self._get_adjacent_text(state, ch_num)
+        final_text = self.editor.run(
+            revised, ch_num, prev_ending, next_opening,
+            style_guide=state.style_guide,
+            tracking_context=tracking_ctx,
+        )
+
+        # Step 5: User confirmation
+        print(f"\n修订完成，字数变化：{len(draft)} → {len(final_text)}")
+        try:
+            confirm = input("是否接受此次修订？(y/n)：").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\n  已中断，修订未保存")
+            return
+
+        if confirm != "y":
+            print("  已放弃修订，保留原版本")
+            return
+
+        # Save revised draft
+        dirs = self.state_mgr.ensure_dirs(state.novel_name)
+        new_revision = ch.revision_count + 1
+        draft_path = dirs["drafts"] / f"chapter_{ch_num:02d}_r{new_revision}.txt"
+        draft_path.write_text(final_text, encoding="utf-8")
+        ch.draft_path = str(draft_path)
+        ch.revision_count = new_revision
+
+        # Update edited version
+        edited_path = dirs["edited"] / f"chapter_{ch_num:02d}.txt"
+        edited_path.write_text(final_text, encoding="utf-8")
+        ch.edited_path = str(edited_path)
+
+        # Update summary and tracking
+        ch.summary = self.ctx_mgr.generate_chapter_summary(final_text, ch_num)
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+        tracker.update_tracking(ch_num, final_text, chapter_plan)
+
+        self.state_mgr.save(state)
+        print("  修订已保存")
+
+    def _collect_user_feedback(self) -> str:
+        print("请输入修改意见（多行输入，单独输入 END 结束）：")
+        lines = []
+        while True:
+            try:
+                line = input()
+            except (KeyboardInterrupt, EOFError):
+                print()
+                break
+            stripped = line.strip()
+            if stripped == "END":
+                break
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    def _select_idea(self, ideas: list[dict], user_feedback: str):
+        if not ideas:
+            print("未能生成修改思路，将直接使用您的意见进行修订。")
+            return user_feedback
+
+        print("\n以下是几个具体的修改思路：\n")
+        for i, idea in enumerate(ideas, 1):
+            print(f"  {i}. {idea.get('title', '思路')}")
+            desc = idea.get('description', '')
+            print(f"     {desc[:80]}{'...' if len(desc) > 80 else ''}")
+            print(f"     预期效果：{idea.get('expected_effect', '')[:60]}")
+            notes = idea.get('consistency_notes', '')
+            if notes and notes != '无':
+                print(f"     一致性提醒：{notes[:60]}")
+            print()
+
+        print(f"  0. 不使用以上思路，直接用我的原始意见")
+
+        choice = input("\n请选择（输入编号或直接输入自定义修改方向）：").strip()
+
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(ideas):
+                selected = ideas[idx - 1]
+                print(f"\n已选择：{selected.get('title', '')}")
+                return selected
+            elif idx == 0:
+                return user_feedback
+            else:
+                print("编号无效，使用原始意见")
+                return user_feedback
+        elif choice:
+            return f"自定义修改方向：{choice}\n原始意见：{user_feedback}"
+        else:
+            return user_feedback
+
+    def _get_adjacent_text(self, state: NovelState, ch_num: int) -> tuple[str, str]:
+        dirs = self.state_mgr.ensure_dirs(state.novel_name)
+        i = ch_num - 1
+        prev_ending = ""
+        next_opening = ""
+        if i > 0:
+            prev_ch = state.chapters[i - 1]
+            prev_path = Path(prev_ch.edited_path) if prev_ch.edited_path else (Path(prev_ch.draft_path) if prev_ch.draft_path else None)
+            if prev_path and prev_path.exists():
+                prev_ending = prev_path.read_text(encoding="utf-8")
+        if i < state.total_chapters - 1:
+            next_ch = state.chapters[i + 1]
+            next_path = Path(next_ch.edited_path) if next_ch.edited_path else (Path(next_ch.draft_path) if next_ch.draft_path else None)
+            if not next_path or not next_path.exists():
+                next_path = dirs["drafts"] / f"chapter_{next_ch.chapter_number:02d}.txt"
+            if next_path.exists():
+                next_opening = next_path.read_text(encoding="utf-8")
+        return prev_ending, next_opening
+
+    def _find_chapter(self, state: NovelState, chapter_number: int):
+        for ch in state.chapters:
+            if ch.chapter_number == chapter_number:
+                return ch
+        return None

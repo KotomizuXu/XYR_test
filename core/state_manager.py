@@ -37,6 +37,7 @@ class NovelState:
     total_chapters: int = 0
     style_guide: dict | None = None
     style_description: str | None = None
+    novel_params: dict | None = None
 
     def __post_init__(self):
         if not self.created_at:

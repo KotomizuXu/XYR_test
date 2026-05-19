@@ -15,9 +15,10 @@ class WriterAgent(BaseAgent):
         super().__init__(llm, config)
         self.ctx_mgr = ctx_mgr
 
-    def run(self, chapter_plan: dict, running_context: str, style_guide: dict | None = None) -> str:
-        words_min = self.config["novel"]["words_per_chapter"]["min"]
-        words_max = self.config["novel"]["words_per_chapter"]["max"]
+    def run(self, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
+        cfg = self.config["novel"]["words_per_chapter"]
+        words_min = words_min or cfg["min"]
+        words_max = words_max or cfg["max"]
 
         tone = "根据设定风格"
         perspective = "第三人称有限视角"
@@ -36,7 +37,7 @@ class WriterAgent(BaseAgent):
         user_msg = f"{running_context}\n\n请根据以上上下文和剧情要点，撰写本章正文。"
         logger.info(f"Writer: drafting chapter {chapter_plan.get('chapter_number', '?')}...")
 
-        text = self.llm.chat(system, user_msg, temperature=self._temperature(), max_tokens=8192)
+        text = self.llm.chat(system, user_msg, temperature=self._temperature(), max_tokens=32768)
 
         # Check word count, request continuation if too short
         char_count = len(text)
@@ -57,9 +58,10 @@ class WriterAgent(BaseAgent):
         logger.info(f"Writer: chapter done. {len(text)} chars.")
         return text.strip()
 
-    def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None) -> str:
-        words_min = self.config["novel"]["words_per_chapter"]["min"]
-        words_max = self.config["novel"]["words_per_chapter"]["max"]
+    def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
+        cfg = self.config["novel"]["words_per_chapter"]
+        words_min = words_min or cfg["min"]
+        words_max = words_max or cfg["max"]
 
         tone = "根据设定风格"
         perspective = "第三人称有限视角"
@@ -83,6 +85,6 @@ class WriterAgent(BaseAgent):
         )
 
         logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')}...")
-        text = self.llm.chat(system, user_msg, temperature=self._temperature(), max_tokens=8192)
+        text = self.llm.chat(system, user_msg, temperature=self._temperature(), max_tokens=32768)
         logger.info(f"Writer: rewrite done. {len(text)} chars.")
         return text.strip()

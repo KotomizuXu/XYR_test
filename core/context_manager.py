@@ -1,5 +1,6 @@
-"""Long context management via chapter summaries."""
+"""Long context management via chapter summaries and tracking data."""
 
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,21 @@ CONTEXT_TEMPLATE = """## 世界观与角色参考
 ## 当前章节剧情要点
 {current_plan}"""
 
+FULL_CONTEXT_TEMPLATE = """## 世界观与角色参考
+{world_ref}
+
+## 故事主线
+{outline_ref}
+
+## 前文摘要
+{summaries}
+
+## 追踪数据
+{tracking_context}
+
+## 当前章节剧情要点
+{current_plan}"""
+
 
 class ContextManager:
     def __init__(self, llm_client, config: dict):
@@ -35,7 +51,7 @@ class ContextManager:
     def generate_chapter_summary(self, chapter_text: str, chapter_number: int) -> str:
         prompt = SUMMARY_PROMPT.format(
             max_length=self.max_summary_length,
-            chapter_text=chapter_text[:6000],  # truncate if too long
+            chapter_text=chapter_text[:6000],
         )
         system = f"你是一个小说编辑助手，擅长提炼故事要点。正在为第{chapter_number}章生成摘要。"
         summary = self.llm.chat(system, prompt, temperature=0.3)
@@ -48,11 +64,21 @@ class ContextManager:
         outline: dict | None,
         completed_summaries: list[str],
         current_chapter_plan: dict,
+        tracking_context: str = "",
     ) -> str:
         world_ref = self._condense_world(world_data)
         outline_ref = self._condense_outline(outline)
         summaries_text = self._format_summaries(completed_summaries)
         current_plan = self._format_chapter_plan(current_chapter_plan)
+
+        if tracking_context:
+            return FULL_CONTEXT_TEMPLATE.format(
+                world_ref=world_ref,
+                outline_ref=outline_ref,
+                summaries=summaries_text,
+                tracking_context=tracking_context,
+                current_plan=current_plan,
+            )
 
         return CONTEXT_TEMPLATE.format(
             world_ref=world_ref,
@@ -111,4 +137,8 @@ class ContextManager:
             lines.append(f"情绪线：{plan['emotional_arc']}")
         if "cliffhanger" in plan:
             lines.append(f"章节钩子：{plan['cliffhanger']}")
+        if "scene_structure" in plan:
+            lines.append(f"场景结构：{plan['scene_structure']}")
+        if "tension_level" in plan:
+            lines.append(f"张力等级：{plan['tension_level']}")
         return "\n".join(lines)
