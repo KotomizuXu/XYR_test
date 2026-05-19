@@ -77,7 +77,13 @@ def parse_json(text: str) -> dict | list:
 
 class LLMClient:
     def __init__(self, config: dict):
-        auth_token = os.environ.get(config["api"]["auth_token_env"], "")
+        token_env = config["api"]["auth_token_env"]
+        auth_token = os.environ.get(token_env, "")
+        if not auth_token:
+            print(f"错误：未找到 API Token。请在项目根目录创建 .env 文件并设置 {token_env}。")
+            print(f"  cp .env.example .env")
+            print(f"  然后编辑 .env 填入你的真实 Token（在 https://open.bigmodel.cn/ 申请）")
+            sys.exit(1)
         self.client = anthropic.Anthropic(
             base_url=config["api"]["base_url"],
             api_key=auth_token,

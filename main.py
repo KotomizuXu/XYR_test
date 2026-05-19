@@ -1,15 +1,20 @@
 """Novel Agent CLI - AI多角色协作小说写作助手
 
 Usage:
-  py -3.10 main.py new --idea "故事灵感" --name "小说名" [--chapters N]
-  py -3.10 main.py continue --name "小说名"
-  py -3.10 main.py revise --name "小说名" [--chapter N]
-  py -3.10 main.py status
+  python3 main.py new --idea "故事灵感" --name "小说名" [--style "风格描述"]
+  python3 main.py continue --name "小说名"
+  python3 main.py revise --name "小说名" [--chapter N]
+  python3 main.py status
 """
 
 import argparse
 import sys
 from pathlib import Path
+
+if sys.version_info < (3, 10):
+    print("错误：需要 Python 3.10 或更高版本。")
+    print(f"  当前版本：Python {sys.version_info.major}.{sys.version_info.minor}")
+    sys.exit(1)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -138,11 +143,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  py -3.10 main.py new --idea "一个程序员穿越到修仙世界" --name "代码修仙"
-  py -3.10 main.py new --idea "末日求生" --name "废土纪元" --style "网文爽文"
-  py -3.10 main.py continue --name "代码修仙"
-  py -3.10 main.py revise --name "代码修仙" --chapter 3
-  py -3.10 main.py status
+  python3 main.py new --idea "一个程序员穿越到修仙世界" --name "代码修仙"
+  python3 main.py new --idea "末日求生" --name "废土纪元" --style "网文爽文"
+  python3 main.py continue --name "代码修仙"
+  python3 main.py revise --name "代码修仙" --chapter 3
+  python3 main.py status
         """,
     )
     sub = parser.add_subparsers(dest="command")
