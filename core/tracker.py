@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -87,7 +86,7 @@ class Tracker:
         self._init_config()
         logger.info("Tracking system initialized")
 
-    def _parse_characters(self, world_data: dict) -> tuple[list[dict], list[dict]]:
+    def _parse_characters(self, world_data: dict) -> tuple[list[dict], list[dict], list[dict]]:
         """Parse characters from world_data, return (all_chars, protagonists, supporting)."""
         characters = world_data.get("characters", [])
         if isinstance(characters, dict):
@@ -227,7 +226,7 @@ class Tracker:
                 foreshadowing.append({
                     "id": f"fs_{fs_idx:03d}",
                     "content": fs,
-                    "planted": {"chapter": None, "description": ""},
+                    "planted": {"chapter": plan.get("chapter_number"), "description": ""},
                     "hints": [],
                     "plannedReveal": {"chapter": None, "description": ""},
                     "status": "active",
@@ -341,15 +340,6 @@ class Tracker:
                 "aliases": ch.get("aliases", []),
                 "addresses_to": {},
             }
-
-        # Name map for quick lookups
-        name_map = {}
-        if protag_name:
-            name_map[protag_name] = protag_name
-        for ch in supporting:
-            name = ch.get("name", "")
-            if name:
-                name_map[name] = name
 
         rules = {
             "version": "1.0",
@@ -482,19 +472,7 @@ class Tracker:
         # Update plot tracker
         plot_tracker = self._read_json("plot_tracker.json")
         plot_tracker["currentState"]["chapter"] = chapter_num
-        for fs in plot_tracker.get("foreshadowing", []):
-            if fs.get("planted", {}).get("chapter") == chapter_num or (
-                isinstance(fs.get("planted"), dict) and fs.get("planted", {}).get("chapter") is None
-                and fs.get("status") == "active"
-            ):
-                # Check if this foreshadowing was planned for this chapter
-                pass
-            # Mark foreshadowing as planted if content matches chapter text
-            if isinstance(fs.get("planted"), dict):
-                planned_ch = fs.get("plannedReveal", {})
-                # Check if this was supposed to be planted in this chapter
-                # (from chapter plans)
-        # Mark foreshadowing items that were planned for this chapter
+        # Mark foreshadowing items planted in this chapter
         for fs in plot_tracker.get("foreshadowing", []):
             planted_ch = fs.get("planted", {})
             if isinstance(planted_ch, dict) and planted_ch.get("chapter") == chapter_num:
@@ -614,22 +592,6 @@ class Tracker:
 
     # --- Auto-fix: automatic repair of simple issues ---
 
-    def check_banned_words(self, text: str, style_guide: dict) -> dict:
-        """Programmatic check for anti-AI banned words from style guide."""
-        banned = []
-        if style_guide and "requirements" in style_guide:
-            banned = style_guide["requirements"].get("anti_ai_banned_words", [])
-        if not banned:
-            return {"found": [], "replaced": {}, "clean": True}
-
-        found = []
-        for word in banned:
-            count = text.count(word)
-            if count > 0:
-                found.append({"word": word, "count": count})
-
-        return {"found": found, "replaced": {}, "clean": len(found) == 0}
-
     def auto_fix_banned_words(self, text: str, style_guide: dict) -> tuple[str, list[str]]:
         """Auto-replace banned AI words with natural alternatives."""
         banned = []
@@ -663,7 +625,7 @@ class Tracker:
 
     def auto_fix(self, chapter_text: str, chapter_num: int) -> dict:
         rules = self._read_json("validation_rules.json")
-        fixes = {"applied": [], "skipped": []}
+        fixes = {"applied": []}
 
         fixed_text = chapter_text
 
@@ -694,13 +656,6 @@ class Tracker:
                 if wrong and correct and wrong in fixed_text:
                     fixed_text = fixed_text.replace(wrong, correct)
                     fixes["applied"].append(f"常见错误：'{wrong}' → '{correct}'")
-
-        # Fix addresses if enabled
-        if auto_fix_config.get("addresses", {}).get("enabled", True):
-            fixed_addresses = rules.get("relationships", {}).get("fixed_addresses", {}).get("rules", {})
-            for pattern, correct_list in fixed_addresses.items():
-                for correct in correct_list:
-                    pass  # Address fixing requires context-aware replacement
 
         return {"text": fixed_text, "fixes": fixes}
 
@@ -736,6 +691,24 @@ class Tracker:
                 lines.append(f"- {name}：最后出场第{ch}章{loc_str}")
 
             parts.append("\n".join(lines))
+
+            # Character groups
+            groups = char_state.get("characterGroups", {})
+            if groups.get("inactive") or groups.get("deceased"):
+                g_lines = ["## 角色状态分组"]
+                if groups.get("inactive"):
+                    g_lines.append(f"- 非活跃：{', '.join(groups['inactive'][:5])}")
+                if groups.get("deceased"):
+                    g_lines.append(f"- 已死亡：{', '.join(groups['deceased'][:5])}")
+                parts.append("\n".join(g_lines))
+
+            # Consistency warnings
+            warnings = char_state.get("consistency", {}).get("warnings", [])
+            if warnings:
+                w_lines = ["## 一致性警告"]
+                for w in warnings[:5]:
+                    w_lines.append(f"- {w}")
+                parts.append("\n".join(w_lines))
 
         # Timeline
         if "timeline" not in disabled:
@@ -792,24 +765,6 @@ class Tracker:
                     lines.append(f"- {name}：{'；'.join(active_rels[:3])}")
             if len(lines) > 1:
                 parts.append("\n".join(lines))
-
-        # Character groups
-        groups = char_state.get("characterGroups", {})
-        if groups.get("inactive") or groups.get("deceased"):
-            lines = ["## 角色状态分组"]
-            if groups.get("inactive"):
-                lines.append(f"- 非活跃：{', '.join(groups['inactive'][:5])}")
-            if groups.get("deceased"):
-                lines.append(f"- 已死亡：{', '.join(groups['deceased'][:5])}")
-            parts.append("\n".join(lines))
-
-        # Consistency warnings
-        warnings = char_state.get("consistency", {}).get("warnings", [])
-        if warnings:
-            lines = ["## 一致性警告"]
-            for w in warnings[:5]:
-                lines.append(f"- {w}")
-            parts.append("\n".join(lines))
 
         # Strictness level
         strictness_desc = {

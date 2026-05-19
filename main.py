@@ -76,10 +76,11 @@ def cmd_status(_args):
         state = mgr.load(name)
         if state:
             phase_names = {
+                "styling": "风格分析",
+                "collecting_params": "参数确认",
                 "directing": "构建世界观",
                 "plotting": "规划剧情",
                 "writing": "撰写中",
-                "reviewing": "审核中",
                 "editing": "编辑润色",
                 "complete": "已完成",
             }
@@ -87,7 +88,8 @@ def cmd_status(_args):
             print(f"\n《{name}》")
             print(f"  阶段：{phase_str}")
             print(f"  进度：{min(state.current_chapter, state.total_chapters)}/{state.total_chapters}章")
-            print(f"  灵感：{state.story_idea[:50]}...")
+            idea_preview = state.story_idea[:50]
+            print(f"  灵感：{idea_preview}{'...' if len(state.story_idea) > 50 else ''}")
     print()
 
 

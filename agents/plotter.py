@@ -1,5 +1,6 @@
 """Plot agent: chapter breakdown and plot points."""
 
+import json
 import logging
 
 from agents.base import BaseAgent
@@ -12,8 +13,8 @@ class PlotAgent(BaseAgent):
 
     def run(self, outline: dict, world: dict, num_chapters: int, style_guide: dict | None = None) -> list[dict]:
         user_msg = (
-            f"## 世界观设定\n{json_dumps_compact(world)}\n\n"
-            f"## 故事大纲\n{json_dumps_compact(outline)}\n\n"
+            f"## 世界观设定\n{json.dumps(world, ensure_ascii=False, indent=2)}\n\n"
+            f"## 故事大纲\n{json.dumps(outline, ensure_ascii=False, indent=2)}\n\n"
             f"## 要求\n"
             f"请将故事拆分为 {num_chapters} 个章节，为每章生成详细的剧情计划。"
         )
@@ -28,8 +29,3 @@ class PlotAgent(BaseAgent):
             raise ValueError(f"Plotter returned unexpected format: {type(result)}")
         logger.info(f"Plotter: done. {len(result)} chapters planned.")
         return result
-
-
-def json_dumps_compact(obj) -> str:
-    import json
-    return json.dumps(obj, ensure_ascii=False, indent=2)

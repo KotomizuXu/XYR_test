@@ -3,7 +3,6 @@
 import json
 import logging
 import signal
-import sys
 from pathlib import Path
 
 import yaml
@@ -41,7 +40,7 @@ class NovelPipeline:
         self.plotter = PlotAgent(self.llm, self.config)
         self.writer = WriterAgent(self.llm, self.config, self.ctx_mgr)
         self.reviewer = ReviewerAgent(self.llm, self.config)
-        self.editor = EditorAgent(self.llm, self.config, self.ctx_mgr)
+        self.editor = EditorAgent(self.llm, self.config)
         self.style_advisor = StyleAdvisorAgent(self.llm, self.config)
         self.critic = CriticAgent(self.llm, self.config)
 
@@ -58,6 +57,7 @@ class NovelPipeline:
             "reviewer": self.reviewer,
             "editor": self.editor,
             "style_advisor": self.style_advisor,
+            "critic": self.critic,
         }
         for name, temp in style_guide["agent_temperatures"].items():
             if name in agent_map and isinstance(temp, (int, float)):
@@ -201,7 +201,7 @@ class NovelPipeline:
             return
 
         # Phase 3: Writing + Reviewing loop
-        if state.phase in ("writing", "reviewing"):
+        if state.phase == "writing":
             self._write_chapters(state)
 
         if self._interrupted:
@@ -262,14 +262,19 @@ class NovelPipeline:
         # Collect user input
         print("请确认或调整以下参数：\n")
 
-        chapters_input = input(f"  总章数（直接回车使用建议值 {rec_chapters}）：").strip()
-        total_chapters = int(chapters_input) if chapters_input else rec_chapters
+        def _read_int(prompt: str, default: int) -> int:
+            while True:
+                raw = input(prompt).strip()
+                if not raw:
+                    return default
+                try:
+                    return int(raw)
+                except ValueError:
+                    print(f"    请输入有效数字（直接回车使用默认值 {default}）")
 
-        min_input = input(f"  每章最少字数（直接回车使用建议值 {rec_min}）：").strip()
-        words_min = int(min_input) if min_input else rec_min
-
-        max_input = input(f"  每章最多字数（直接回车使用建议值 {rec_max}）：").strip()
-        words_max = int(max_input) if max_input else rec_max
+        total_chapters = _read_int(f"  总章数（直接回车使用建议值 {rec_chapters}）：", rec_chapters)
+        words_min = _read_int(f"  每章最少字数（直接回车使用建议值 {rec_min}）：", rec_min)
+        words_max = _read_int(f"  每章最多字数（直接回车使用建议值 {rec_max}）：", rec_max)
 
         state.total_chapters = total_chapters
         state.novel_params = {
@@ -314,8 +319,7 @@ class NovelPipeline:
             print(f"  [写前检查] ⚠️ 缺失数据：{missing}，继续写作但可能影响一致性")
 
         # Report validation level
-        rules = tracker._read_json("validation_rules.json")
-        if rules:
+        if checks["validation_rules"]:
             strictness = tracker._get_strictness()
             print(f"  [写前检查] 验证模式：{strictness}")
 
@@ -363,19 +367,22 @@ class NovelPipeline:
             ch.draft_path = str(draft_path)
 
             # Programmatic checks: character name alias fix
+            fixed = False
             fix_result = tracker.auto_fix(draft, ch_num)
             if fix_result["fixes"]["applied"]:
                 draft = fix_result["text"]
+                fixed = True
                 print(f"  [追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
 
             # Programmatic checks: banned AI words auto-fix
             fixed_draft, banned_changes = tracker.auto_fix_banned_words(draft, state.style_guide)
             if banned_changes:
                 draft = fixed_draft
+                fixed = True
                 print(f"  [禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
 
-            # Save auto-fixed draft
-            draft_path.write_text(draft, encoding="utf-8")
+            if fixed:
+                draft_path.write_text(draft, encoding="utf-8")
 
             # Review with tracking context for consistency checking
             print(f"  [审核] 正在审稿（含一致性校验）...")

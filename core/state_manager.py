@@ -28,7 +28,7 @@ class NovelState:
     story_idea: str
     created_at: str = ""
     updated_at: str = ""
-    phase: str = "styling"  # styling | directing | plotting | writing | reviewing | editing | complete
+    phase: str = "styling"  # styling | collecting_params | directing | plotting | writing | editing | complete
     current_chapter: int = 0
     world_data: dict | None = None
     outline: dict | None = None

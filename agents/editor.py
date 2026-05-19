@@ -3,17 +3,12 @@
 import logging
 
 from agents.base import BaseAgent
-from core.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
 
 class EditorAgent(BaseAgent):
     PROMPT_TEMPLATE = "editor_system.txt"
-
-    def __init__(self, llm, config: dict, ctx_mgr: ContextManager):
-        super().__init__(llm, config)
-        self.ctx_mgr = ctx_mgr
 
     def run(
         self,
