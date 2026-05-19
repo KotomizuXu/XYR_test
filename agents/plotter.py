@@ -1,0 +1,34 @@
+"""Plot agent: chapter breakdown and plot points."""
+
+import logging
+
+from agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
+
+
+class PlotAgent(BaseAgent):
+    PROMPT_TEMPLATE = "plotter_system.txt"
+
+    def run(self, outline: dict, world: dict, num_chapters: int) -> list[dict]:
+        user_msg = (
+            f"## 世界观设定\n{json_dumps_compact(world)}\n\n"
+            f"## 故事大纲\n{json_dumps_compact(outline)}\n\n"
+            f"## 要求\n"
+            f"请将故事拆分为 {num_chapters} 个章节，为每章生成详细的剧情计划。"
+        )
+        logger.info(f"Plotter: generating {num_chapters} chapter plans...")
+        result = self.llm.chat_json(
+            self.system_prompt, user_msg, temperature=self._temperature(), max_tokens=8192
+        )
+        if isinstance(result, dict) and "chapters" in result:
+            result = result["chapters"]
+        if not isinstance(result, list):
+            raise ValueError(f"Plotter returned unexpected format: {type(result)}")
+        logger.info(f"Plotter: done. {len(result)} chapters planned.")
+        return result
+
+
+def json_dumps_compact(obj) -> str:
+    import json
+    return json.dumps(obj, ensure_ascii=False, indent=2)

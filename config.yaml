@@ -1,0 +1,27 @@
+api:
+  base_url: "https://open.bigmodel.cn/api/anthropic"
+  auth_token_env: "GLM_API_TOKEN"
+  model: "glm-5.1"
+  max_tokens: 8192
+  temperature: 0.7
+  timeout: 300
+
+novel:
+  default_chapters: 20
+  words_per_chapter:
+    min: 3000
+    max: 5000
+  review_max_retries: 2
+  summary_max_length: 800
+
+agents:
+  director:
+    temperature: 0.8
+  plotter:
+    temperature: 0.7
+  writer:
+    temperature: 0.85
+  editor:
+    temperature: 0.5
+  reviewer:
+    temperature: 0.3
