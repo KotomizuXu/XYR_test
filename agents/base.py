@@ -27,6 +27,13 @@ class BaseAgent(ABC):
     def _temperature(self) -> float:
         return self._agent_config().get("temperature", self.config["api"]["temperature"])
 
+    def apply_style(self, prompt: str, style_guide: dict | None) -> str:
+        if not style_guide:
+            return prompt
+        import json
+        style_text = json.dumps(style_guide, ensure_ascii=False, indent=2)
+        return f"{prompt}\n\n## 风格指南\n请严格遵循以下风格指南进行创作：\n{style_text}"
+
     @abstractmethod
     def run(self, **kwargs) -> dict | str:
         ...

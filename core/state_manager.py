@@ -28,13 +28,15 @@ class NovelState:
     story_idea: str
     created_at: str = ""
     updated_at: str = ""
-    phase: str = "directing"  # directing | plotting | writing | reviewing | editing | complete
+    phase: str = "styling"  # styling | directing | plotting | writing | reviewing | editing | complete
     current_chapter: int = 0
     world_data: dict | None = None
     outline: dict | None = None
     chapter_plans: list[dict] | None = None
     chapters: list[ChapterState] = field(default_factory=list)
     total_chapters: int = 0
+    style_guide: dict | None = None
+    style_description: str | None = None
 
     def __post_init__(self):
         if not self.created_at:

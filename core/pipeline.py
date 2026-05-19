@@ -12,6 +12,7 @@ from agents.director import DirectorAgent
 from agents.editor import EditorAgent
 from agents.plotter import PlotAgent
 from agents.reviewer import ReviewerAgent
+from agents.style_advisor import StyleAdvisorAgent
 from agents.writer import WriterAgent
 from core.context_manager import ContextManager
 from core.llm_client import LLMClient
@@ -39,6 +40,7 @@ class NovelPipeline:
         self.writer = WriterAgent(self.llm, self.config, self.ctx_mgr)
         self.reviewer = ReviewerAgent(self.llm, self.config)
         self.editor = EditorAgent(self.llm, self.config, self.ctx_mgr)
+        self.style_advisor = StyleAdvisorAgent(self.llm, self.config)
 
         self._interrupted = False
         signal.signal(signal.SIGINT, self._handle_interrupt)
@@ -47,7 +49,7 @@ class NovelPipeline:
         print("\n\n收到中断信号，正在保存进度...")
         self._interrupted = True
 
-    def start_new_novel(self, story_idea: str, novel_name: str, num_chapters: int = None) -> None:
+    def start_new_novel(self, story_idea: str, novel_name: str, num_chapters: int = None, style: str | None = None) -> None:
         if num_chapters is None:
             num_chapters = self.config["novel"]["default_chapters"]
 
@@ -55,8 +57,9 @@ class NovelPipeline:
         state = NovelState(
             novel_name=novel_name,
             story_idea=story_idea,
-            phase="directing",
+            phase="styling",
             total_chapters=num_chapters,
+            style_description=style,
         )
         self.state_mgr.ensure_dirs(novel_name)
         self.state_mgr.save(state)
@@ -96,10 +99,22 @@ class NovelPipeline:
             raise
 
     def _run_pipeline(self, state: NovelState) -> None:
+        # Phase 0: Styling
+        if state.phase == "styling":
+            style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
+            print(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
+            state.style_guide = self.style_advisor.run(style_desc)
+            state.phase = "directing"
+            self.state_mgr.save(state)
+            print(f"[风格顾问] 风格指南已生成：{state.style_guide.get('style_name', '?')}\n")
+
+        if self._interrupted:
+            return
+
         # Phase 1: Directing
         if state.phase == "directing":
             print("[导演] 正在构建世界观和大纲...")
-            result = self.director.run(state.story_idea, state.total_chapters)
+            result = self.director.run(state.story_idea, state.total_chapters, style_guide=state.style_guide)
             state.world_data = result.get("world", {})
             state.outline = result.get("outline", {})
             # Save character data into world_data for reference
@@ -127,7 +142,7 @@ class NovelPipeline:
         # Phase 2: Plotting
         if state.phase == "plotting":
             print("[编剧] 正在拆分章节和规划剧情...")
-            chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters)
+            chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters, style_guide=state.style_guide)
             state.chapter_plans = chapter_plans
 
             novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
@@ -194,7 +209,7 @@ class NovelPipeline:
 
             # Write draft
             print(f"  [作家] 正在撰写...")
-            draft = self.writer.run(plan, running_ctx)
+            draft = self.writer.run(plan, running_ctx, style_guide=state.style_guide)
 
             # Save draft
             dirs = self.state_mgr.ensure_dirs(state.novel_name)
@@ -204,7 +219,7 @@ class NovelPipeline:
 
             # Review loop
             print(f"  [审核] 正在审稿...")
-            review = self.reviewer.run(draft, plan, state.world_data)
+            review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide)
             ch.review_notes = json.dumps(review, ensure_ascii=False)
 
             # Save review report
@@ -222,14 +237,14 @@ class NovelPipeline:
                     f"- [{i.get('severity')}] {i.get('description')} → 建议：{i.get('suggestion')}"
                     for i in issues
                 )
-                draft = self.writer.rewrite(draft, feedback, plan, running_ctx)
+                draft = self.writer.rewrite(draft, feedback, plan, running_ctx, style_guide=state.style_guide)
 
                 draft_path = dirs["drafts"] / f"chapter_{ch_num:02d}_r{retries}.txt"
                 draft_path.write_text(draft, encoding="utf-8")
                 ch.draft_path = str(draft_path)
                 ch.revision_count = retries
 
-                review = self.reviewer.run(draft, plan, state.world_data)
+                review = self.reviewer.run(draft, plan, state.world_data, style_guide=state.style_guide)
                 ch.review_notes = json.dumps(review, ensure_ascii=False)
 
             if review.get("approved", False):
@@ -285,7 +300,7 @@ class NovelPipeline:
                 if next_draft.exists():
                     next_opening = next_draft.read_text(encoding="utf-8")
 
-            edited = self.editor.run(draft, ch_num, prev_ending, next_opening)
+            edited = self.editor.run(draft, ch_num, prev_ending, next_opening, style_guide=state.style_guide)
 
             edited_path = dirs["edited"] / f"chapter_{ch_num:02d}.txt"
             edited_path.write_text(edited, encoding="utf-8")

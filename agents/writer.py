@@ -15,16 +15,23 @@ class WriterAgent(BaseAgent):
         super().__init__(llm, config)
         self.ctx_mgr = ctx_mgr
 
-    def run(self, chapter_plan: dict, running_context: str) -> str:
+    def run(self, chapter_plan: dict, running_context: str, style_guide: dict | None = None) -> str:
         words_min = self.config["novel"]["words_per_chapter"]["min"]
         words_max = self.config["novel"]["words_per_chapter"]["max"]
+
+        tone = "根据设定风格"
+        perspective = "第三人称有限视角"
+        if style_guide:
+            tone = style_guide.get("tone", {}).get("overall", tone)
+            perspective = style_guide.get("worldbuilding", {}).get("exposition_style", perspective)
 
         system = self.system_prompt.format(
             words_min=words_min,
             words_max=words_max,
-            tone_guidance="根据设定风格",
-            narrative_perspective="第三人称有限视角",
+            tone_guidance=tone,
+            narrative_perspective=perspective,
         )
+        system = self.apply_style(system, style_guide)
 
         user_msg = f"{running_context}\n\n请根据以上上下文和剧情要点，撰写本章正文。"
         logger.info(f"Writer: drafting chapter {chapter_plan.get('chapter_number', '?')}...")
@@ -50,16 +57,23 @@ class WriterAgent(BaseAgent):
         logger.info(f"Writer: chapter done. {len(text)} chars.")
         return text.strip()
 
-    def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str) -> str:
+    def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None) -> str:
         words_min = self.config["novel"]["words_per_chapter"]["min"]
         words_max = self.config["novel"]["words_per_chapter"]["max"]
+
+        tone = "根据设定风格"
+        perspective = "第三人称有限视角"
+        if style_guide:
+            tone = style_guide.get("tone", {}).get("overall", tone)
+            perspective = style_guide.get("worldbuilding", {}).get("exposition_style", perspective)
 
         system = self.system_prompt.format(
             words_min=words_min,
             words_max=words_max,
-            tone_guidance="根据设定风格",
-            narrative_perspective="第三人称有限视角",
+            tone_guidance=tone,
+            narrative_perspective=perspective,
         )
+        system = self.apply_style(system, style_guide)
 
         user_msg = (
             f"{running_context}\n\n"

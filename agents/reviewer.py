@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class ReviewerAgent(BaseAgent):
     PROMPT_TEMPLATE = "reviewer_system.txt"
 
-    def run(self, chapter_text: str, chapter_plan: dict, world_data: dict | None = None) -> dict:
+    def run(self, chapter_text: str, chapter_plan: dict, world_data: dict | None = None, style_guide: dict | None = None) -> dict:
         user_msg = (
             f"## 章节剧情计划\n{json.dumps(chapter_plan, ensure_ascii=False, indent=2)}\n\n"
             f"## 章节正文\n{chapter_text}\n\n"
@@ -21,9 +21,10 @@ class ReviewerAgent(BaseAgent):
 
         user_msg += "请审核以上章节内容。"
 
+        system = self.apply_style(self.system_prompt, style_guide)
         logger.info(f"Reviewer: checking chapter {chapter_plan.get('chapter_number', '?')}...")
         result = self.llm.chat_json(
-            self.system_prompt, user_msg, temperature=self._temperature(), max_tokens=4096
+            system, user_msg, temperature=self._temperature(), max_tokens=4096
         )
 
         approved = result.get("approved", False)

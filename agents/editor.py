@@ -21,6 +21,7 @@ class EditorAgent(BaseAgent):
         chapter_number: int,
         prev_chapter_ending: str = "",
         next_chapter_opening: str = "",
+        style_guide: dict | None = None,
     ) -> str:
         user_msg = f"## 第{chapter_number}章正文\n{chapter_text}\n\n"
         if prev_chapter_ending:
@@ -29,9 +30,10 @@ class EditorAgent(BaseAgent):
             user_msg += f"## 下一章开头（参考衔接）\n{next_chapter_opening[:500]}\n\n"
         user_msg += "请对以上章节进行润色编辑。"
 
+        system = self.apply_style(self.system_prompt, style_guide)
         logger.info(f"Editor: polishing chapter {chapter_number}...")
         result = self.llm.chat(
-            self.system_prompt, user_msg, temperature=self._temperature(), max_tokens=8192
+            system, user_msg, temperature=self._temperature(), max_tokens=8192
         )
         logger.info(f"Editor: done. {len(result)} chars.")
         return result.strip()

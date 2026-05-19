@@ -10,16 +10,17 @@ logger = logging.getLogger(__name__)
 class PlotAgent(BaseAgent):
     PROMPT_TEMPLATE = "plotter_system.txt"
 
-    def run(self, outline: dict, world: dict, num_chapters: int) -> list[dict]:
+    def run(self, outline: dict, world: dict, num_chapters: int, style_guide: dict | None = None) -> list[dict]:
         user_msg = (
             f"## 世界观设定\n{json_dumps_compact(world)}\n\n"
             f"## 故事大纲\n{json_dumps_compact(outline)}\n\n"
             f"## 要求\n"
             f"请将故事拆分为 {num_chapters} 个章节，为每章生成详细的剧情计划。"
         )
+        system = self.apply_style(self.system_prompt, style_guide)
         logger.info(f"Plotter: generating {num_chapters} chapter plans...")
         result = self.llm.chat_json(
-            self.system_prompt, user_msg, temperature=self._temperature(), max_tokens=8192
+            system, user_msg, temperature=self._temperature(), max_tokens=8192
         )
         if isinstance(result, dict) and "chapters" in result:
             result = result["chapters"]

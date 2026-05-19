@@ -20,17 +20,20 @@ def cmd_new(args):
     idea = args.idea
     name = args.name
     chapters = args.chapters
+    style = args.style
 
     if not idea:
         idea = input("请输入故事灵感：").strip()
     if not name:
         name = input("请输入小说名称：").strip()
+    if not style:
+        style = input("请输入小说风格（如：网文爽文、传统文学、悬疑推理，留空使用默认风格）：").strip() or None
     if not idea or not name:
         print("故事灵感和小说名称不能为空")
         return
 
     pipeline = NovelPipeline()
-    pipeline.start_new_novel(idea, name, chapters or None)
+    pipeline.start_new_novel(idea, name, chapters or None, style=style)
 
 
 def cmd_continue(args):
@@ -102,6 +105,7 @@ def main():
     p_new.add_argument("--idea", "-i", help="故事灵感")
     p_new.add_argument("--name", "-n", help="小说名称")
     p_new.add_argument("--chapters", "-c", type=int, help="章节数量（默认20）")
+    p_new.add_argument("--style", "-s", help="小说风格描述（如：网文爽文、传统文学、悬疑推理）")
 
     # continue
     p_cont = sub.add_parser("continue", help="继续创作")
