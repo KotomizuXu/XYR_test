@@ -1,5 +1,6 @@
 """Tracking system for story consistency, forgotten elements, and timeline management."""
 
+import csv
 import json
 import logging
 from datetime import datetime
@@ -174,26 +175,51 @@ class Tracker:
                 "warnings": [],
             },
         }
+
+        # Pre-populate consistency from world_data
+        if protagonists:
+            p = protagonists[0]
+            if p.get("appearance"):
+                state["consistency"]["physicalTraits"][p.get("name", "主角")] = p["appearance"]
+            if p.get("personality"):
+                state["consistency"]["personalityTraits"][p.get("name", "主角")] = p["personality"]
+            if p.get("voice"):
+                state["consistency"]["speechPatterns"][p.get("name", "主角")] = p["voice"]
+        for ch in supporting:
+            name = ch.get("name", "")
+            if not name:
+                continue
+            if ch.get("appearance"):
+                state["consistency"]["physicalTraits"][name] = ch["appearance"]
+            if ch.get("personality"):
+                state["consistency"]["personalityTraits"][name] = ch["personality"]
+            if ch.get("voice"):
+                state["consistency"]["speechPatterns"][name] = ch["voice"]
+
         self._write_json("character_state.json", state)
 
     def _init_timeline(self, chapter_plans: list[dict]) -> None:
         now = self._now()
         events = []
+        start_time = ""
         for plan in chapter_plans:
+            time_info = plan.get("time", plan.get("story_time", ""))
             events.append({
                 "chapter": plan.get("chapter_number", 0),
-                "date": "",
+                "date": str(time_info) if time_info else "",
                 "event": plan.get("title", ""),
-                "duration": "",
+                "duration": plan.get("duration", ""),
                 "participants": [],
             })
+            if not start_time and time_info:
+                start_time = str(time_info)
 
         timeline = {
             "novel": self.novel_name,
             "lastUpdated": now,
             "storyTime": {
-                "start": "",
-                "current": "",
+                "start": start_time,
+                "current": start_time,
                 "end": "",
                 "format": "故事内时间标记方式",
             },
@@ -328,7 +354,7 @@ class Tracker:
             if isinstance(faction, dict) and faction.get("name"):
                 factions[faction["name"]] = {
                     "description": faction.get("purpose", faction.get("nature", "")),
-                    "leader": "",
+                    "leader": faction.get("key_figures", [""])[0] if faction.get("key_figures") else "",
                     "members": faction.get("key_figures", []),
                     "goals": faction.get("purpose", ""),
                     "alliedWith": [],
@@ -379,6 +405,27 @@ class Tracker:
                 "addresses_to": {},
             }
 
+        # Pre-populate protagonist traits from world_data
+        protag_traits = {}
+        if protagonists:
+            p = protagonists[0]
+            if p.get("appearance"):
+                protag_traits["appearance"] = p["appearance"]
+            if p.get("abilities"):
+                protag_traits["abilities"] = p["abilities"] if isinstance(p["abilities"], list) else [p["abilities"]]
+            if p.get("age"):
+                protag_traits["age"] = p["age"]
+
+        # Generate character_substitution cross-references from aliases
+        char_subs = []
+        for ch in all_chars:
+            name = ch.get("name", "")
+            aliases = ch.get("aliases", [])
+            if name and aliases:
+                for alias in aliases:
+                    if alias and alias != name:
+                        char_subs.append({"wrong": alias, "correct": name})
+
         rules = {
             "version": "1.0",
             "characters": {
@@ -386,7 +433,7 @@ class Tracker:
                     "name": protag_name,
                     "aliases": protag_aliases,
                     "forbidden": protag_forbidden,
-                    "traits": {},
+                    "traits": protag_traits,
                 },
                 "supporting": supporting_rules,
             },
@@ -425,7 +472,7 @@ class Tracker:
                 },
             },
             "common_errors": {
-                "character_substitution": [],
+                "character_substitution": char_subs,
                 "address_mistakes": [],
             },
             "validation_levels": {
@@ -486,9 +533,74 @@ class Tracker:
         }
         self._write_json("config.json", config)
 
+    # --- Snapshot & CSV change log ---
+
+    _TRACKING_FILES = [
+        "character_state.json", "timeline.json", "plot_tracker.json",
+        "relationships.json", "validation_rules.json", "locations.json",
+    ]
+
+    def snapshot(self) -> dict[str, str]:
+        """Flatten all tracking JSONs into {dotted.path: serialized_value}."""
+        flat = {}
+        for fname in self._TRACKING_FILES:
+            data = self._read_json(fname)
+            prefix = fname.replace(".json", "")
+            self._flatten(data, prefix, flat)
+        return flat
+
+    @staticmethod
+    def _flatten(obj, prefix: str, out: dict) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                Tracker._flatten(v, f"{prefix}.{k}", out)
+        elif isinstance(obj, list):
+            # For lists, store length as summary and individual items by index
+            out[prefix] = f"[{len(obj)}项]"
+            for i, item in enumerate(obj):
+                Tracker._flatten(item, f"{prefix}[{i}]", out)
+        else:
+            out[prefix] = str(obj) if obj is not None else ""
+
+    def log_changes_csv(self, chapter_num: int, before: dict[str, str], after: dict[str, str], source: str = "") -> None:
+        """Compare two snapshots and append changed fields to tracking_changes.csv."""
+        csv_path = self.tracking_dir / "tracking_changes.csv"
+        all_keys = sorted(set(before.keys()) | set(after.keys()))
+
+        rows = []
+        for key in all_keys:
+            old_val = before.get(key, "")
+            new_val = after.get(key, "")
+            if old_val != new_val:
+                # New field
+                if not old_val:
+                    change = new_val
+                # Deleted field
+                elif not new_val:
+                    change = f"{old_val} → (删除)"
+                # Changed
+                else:
+                    change = f"{old_val} → {new_val}"
+                rows.append({
+                    "章节": chapter_num,
+                    "字段路径": key,
+                    "变化": change,
+                    "来源": source,
+                })
+
+        if not rows:
+            return
+
+        write_header = not csv_path.exists()
+        with open(csv_path, "a", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["章节", "字段路径", "变化", "来源"])
+            if write_header:
+                writer.writeheader()
+            writer.writerows(rows)
+
     # --- Update: called after each chapter is written ---
 
-    def update_tracking(self, chapter_num: int, chapter_text: str, chapter_plan: dict) -> dict:
+    def update_tracking(self, chapter_num: int, chapter_text: str, chapter_plan: dict, review: dict | None = None) -> dict:
         now = self._now()
         report = {}
 
@@ -502,6 +614,7 @@ class Tracker:
         # Update character last-seen and build appearance record
         appearances = []
         updated_chars = []
+        plot_points_str = str(chapter_plan.get("plot_points", []))
         for name in all_names:
             if name in chapter_text:
                 # Update supporting character lastSeen
@@ -515,10 +628,11 @@ class Tracker:
                     char_state["protagonist"]["currentStatus"]["chapter"] = chapter_num
 
                 updated_chars.append(name)
+                sig = "重要" if name in plot_points_str else ""
                 appearances.append({
                     "character": name,
                     "role": "主角" if name == protag_name else "配角",
-                    "significance": "",
+                    "significance": sig,
                 })
 
         # Append appearance tracking
@@ -530,13 +644,34 @@ class Tracker:
         self._write_json("character_state.json", char_state)
         report["characters_updated"] = updated_chars
 
-        # --- All tracking updates consolidated below ---
+        # --- L1.3: chapter_plan string matching updates ---
 
-        # Update plot_tracker: advance currentNode, update notes from plan
+        # Update plot_tracker
         plot_tracker = self._read_json("plot_tracker.json")
         plot_tracker["currentState"]["chapter"] = chapter_num
-        # Update currentNode based on chapter title
         title = chapter_plan.get("title", "")
+
+        # Update currentState location/timepoint/mainPlotStage from chapter_plan
+        location_info = chapter_plan.get("location", "")
+        if location_info:
+            plot_tracker["currentState"]["location"] = str(location_info)
+        time_info = chapter_plan.get("time", chapter_plan.get("story_time", ""))
+        if time_info:
+            plot_tracker["currentState"]["timepoint"] = str(time_info)
+        act = chapter_plan.get("act", "")
+        if act:
+            act_map = {"第一幕": "开端", "第二幕": "发展", "第三幕": "高潮"}
+            plot_tracker["currentState"]["mainPlotStage"] = act_map.get(str(act), str(act))
+
+        # Track major events (high tension chapters)
+        tension = chapter_plan.get("tension_level", "")
+        if tension == "high" or tension == "高潮":
+            plot_tracker.setdefault("checkpoints", {}).setdefault("majorEvents", []).append({
+                "chapter": chapter_num,
+                "event": title or f"第{chapter_num}章高潮",
+            })
+
+        # Update currentNode based on chapter title
         if title:
             plot_tracker["plotlines"]["main"]["currentNode"] = title
             plot_tracker["plotlines"]["main"].setdefault("completedNodes", []).append(title)
@@ -562,8 +697,6 @@ class Tracker:
             if event.get("chapter") == chapter_num:
                 event["event"] = title or event.get("event", "")
                 event["participants"] = updated_chars
-                # Try to extract time from chapter plan
-                time_info = chapter_plan.get("time", chapter_plan.get("story_time", ""))
                 if time_info:
                     event["date"] = str(time_info)
                     timeline["storyTime"]["current"] = str(time_info)
@@ -573,7 +706,6 @@ class Tracker:
 
         # Update location tracking if plan has location info
         loc_data = self._read_json("locations.json")
-        location_info = chapter_plan.get("location", "")
         if location_info and loc_data.get("locations"):
             for loc in loc_data["locations"]:
                 if loc.get("name") and loc["name"] in str(location_info):
@@ -589,17 +721,14 @@ class Tracker:
         char_state = self._read_json("character_state.json")
         protag = char_state.get("protagonist", {})
         if protag.get("name"):
-            # Update location from plan
             if location_info:
                 protag["currentStatus"]["location"] = str(location_info)
-            # Extract new skills/knowledge from plan
             for point in chapter_plan.get("plot_points", []):
                 pt = str(point)
                 if "学会" in pt or "获得" in pt or "领悟" in pt or "掌握" in pt:
                     protag["currentStatus"].setdefault("skills", []).append(pt[:50])
                 if "发现" in pt or "得知" in pt or "知道" in pt or "意识到" in pt:
                     protag["currentStatus"].setdefault("knowledge", []).append(pt[:50])
-            # Record consistency warning for suspicious patterns
             if "性格" in chapter_text or "人设" in chapter_text:
                 char_state.setdefault("consistency", {}).setdefault("warnings", []).append(
                     f"第{chapter_num}章：出现显式性格描述，建议检查是否符合已建立的性格设定"
@@ -607,8 +736,93 @@ class Tracker:
         char_state["lastUpdated"] = now
         self._write_json("character_state.json", char_state)
 
+        # --- L1.1: Consume reviewer output ---
+        if review:
+            self._consume_review(chapter_num, review)
+
         logger.info(f"Tracking updated for chapter {chapter_num}")
         return report
+
+    def _consume_review(self, chapter_num: int, review: dict) -> None:
+        """Extract data from reviewer's existing output into dead tracking fields."""
+        consistency = review.get("consistency_checks", {})
+        if not consistency:
+            return
+
+        # Character issues → consistency.warnings + physicalTraits + personalityTraits
+        char_state = self._read_json("character_state.json")
+        consistency_block = char_state.setdefault("consistency", {})
+
+        for issue in consistency.get("character_issues", []):
+            consistency_block.setdefault("warnings", []).append(f"第{chapter_num}章 角色问题：{issue}")
+
+        for issue in consistency.get("physical_traits_issues", []):
+            traits = consistency_block.setdefault("physicalTraits", {})
+            traits[f"ch{chapter_num}"] = issue
+
+        for issue in consistency.get("personality_issues", []):
+            traits = consistency_block.setdefault("personalityTraits", {})
+            traits[f"ch{chapter_num}"] = issue
+
+        # Knowledge state issues → supportingCharacters secrets
+        for issue in consistency.get("knowledge_state_issues", []):
+            for name, data in char_state.get("supportingCharacters", {}).items():
+                if name in str(issue):
+                    data.setdefault("secrets", []).append(f"第{chapter_num}章：{issue}")
+                    break
+
+        if consistency_block:
+            char_state["lastUpdated"] = self._now()
+            self._write_json("character_state.json", char_state)
+
+        # World issues → plot_tracker.notes.plotHoles
+        plot_tracker = self._read_json("plot_tracker.json")
+        notes = plot_tracker.setdefault("notes", {})
+        for issue in consistency.get("world_issues", []):
+            notes.setdefault("plotHoles", []).append(f"第{chapter_num}章：{issue}")
+            notes.setdefault("inconsistencies", []).append(f"第{chapter_num}章 世界观：{issue}")
+
+        # Timeline issues → timeline.anomalies
+        timeline = self._read_json("timeline.json")
+        for issue in consistency.get("timeline_issues", []):
+            timeline.setdefault("anomalies", {}).setdefault("issues", []).append(
+                f"第{chapter_num}章：{issue}"
+            )
+            timeline["lastUpdated"] = self._now()
+            self._write_json("timeline.json", timeline)
+
+        # Issues by type → relationships.conflicts + plot_tracker.notes
+        relationships = self._read_json("relationships.json")
+        for issue in review.get("issues", []):
+            issue_type = issue.get("type", "")
+            desc = issue.get("description", "")
+            entry = f"第{chapter_num}章：{desc}"
+            if issue_type == "character":
+                relationships.setdefault("conflicts", {}).setdefault("personal", []).append(entry)
+            elif issue_type == "worldbuilding":
+                notes.setdefault("inconsistencies", []).append(entry)
+
+        if notes:
+            plot_tracker["lastUpdated"] = self._now()
+            self._write_json("plot_tracker.json", plot_tracker)
+
+        relationships["lastUpdated"] = self._now()
+        self._write_json("relationships.json", relationships)
+
+        # auto_fix_suggestions → validation_rules.common_errors
+        rules = self._read_json("validation_rules.json")
+        for fix in review.get("auto_fix_suggestions", []):
+            orig = fix.get("original", "")
+            suggested = fix.get("suggested", "")
+            fix_type = fix.get("type", "")
+            if orig and suggested:
+                target = "character_substitution" if "character" in fix_type else "address_mistakes"
+                rules.setdefault("common_errors", {}).setdefault(target, []).append({
+                    "wrong": orig,
+                    "correct": suggested,
+                    "chapter": chapter_num,
+                })
+        self._write_json("validation_rules.json", rules)
 
     # --- Forgotten elements check ---
 
@@ -877,6 +1091,269 @@ class Tracker:
 
         return {"text": fixed_text, "fixes": fixes}
 
+    # --- Update from reviewer's tracking_updates (L2) ---
+
+    def update_from_review(self, chapter_num: int, review: dict) -> None:
+        """Extract tracking_updates from reviewer output into tracking fields."""
+        tu = review.get("tracking_updates", {})
+        if not tu:
+            return
+
+        now = self._now()
+
+        # Character changes
+        char_state = self._read_json("character_state.json")
+        protag_name = char_state.get("protagonist", {}).get("name", "")
+        for change in tu.get("character_changes", []):
+            name = change.get("name", "")
+            field = change.get("field", "")
+            new_val = change.get("new", "")
+            if not name or not field:
+                continue
+
+            if name == protag_name and "protagonist" in char_state:
+                status = char_state["protagonist"].setdefault("currentStatus", {})
+                field_map = {
+                    "health": "health", "mentalState": "mentalState",
+                    "location": "location", "alive": "alive", "position": "position",
+                }
+                if field in field_map:
+                    status[field_map[field]] = new_val
+                # Update development milestones
+                dev = char_state["protagonist"].setdefault("development", {})
+                milestones = dev.setdefault("milestones", [])
+                milestones.append(f"第{chapter_num}章：{field} → {new_val}")
+            elif name in char_state.get("supportingCharacters", {}):
+                sup = char_state["supportingCharacters"][name]
+                if field == "alive":
+                    sup.setdefault("status", {})["alive"] = new_val
+                elif field == "location":
+                    sup.setdefault("status", {})["currentLocation"] = new_val
+                elif field == "mentalState":
+                    sup.setdefault("arc", {})["current"] = new_val
+
+        char_state["lastUpdated"] = now
+        self._write_json("character_state.json", char_state)
+
+        # Relationship changes
+        relationships = self._read_json("relationships.json")
+        for rel_change in tu.get("relationship_changes", []):
+            characters = rel_change.get("characters", [])
+            change_desc = rel_change.get("change", "")
+            rel_type = rel_change.get("type", "personal")
+            if not characters or not change_desc:
+                continue
+
+            # Add to dynamicRelations
+            relationships.setdefault("dynamicRelations", []).append({
+                "characters": characters,
+                "change": change_desc,
+                "chapter": chapter_num,
+            })
+
+            # Add to history
+            relationships.setdefault("history", []).append(
+                f"第{chapter_num}章：{' 与 '.join(characters)} — {change_desc}"
+            )
+
+            # Add to conflicts if type matches
+            conflict_map = {"personal": "personal", "factional": "factional", "ideological": "ideological"}
+            if rel_type in conflict_map:
+                conflicts = relationships.setdefault("conflicts", {})
+                conflicts.setdefault(conflict_map[rel_type], []).append(
+                    f"第{chapter_num}章：{' 与 '.join(characters)} — {change_desc}"
+                )
+
+            # Update relationshipMatrix
+            matrix = relationships.setdefault("relationshipMatrix", {}).setdefault("matrix", {})
+            for char_name in characters:
+                if char_name not in matrix:
+                    matrix[char_name] = {}
+                for other in characters:
+                    if other != char_name:
+                        matrix[char_name][other] = change_desc
+
+        relationships["lastUpdated"] = now
+        self._write_json("relationships.json", relationships)
+
+        # Conflict updates
+        conflict_data = tu.get("conflict_updates", {})
+        plot_tracker = self._read_json("plot_tracker.json")
+        conflicts = plot_tracker.setdefault("conflicts", {})
+
+        for new_conflict in conflict_data.get("new_active", []):
+            desc = new_conflict.get("description", "")
+            ctype = new_conflict.get("type", "personal")
+            if desc:
+                conflicts.setdefault("active", []).append({
+                    "description": desc,
+                    "type": ctype,
+                    "chapter": chapter_num,
+                })
+
+        for resolved in conflict_data.get("resolved", []):
+            desc = resolved.get("description", "")
+            if desc:
+                conflicts.setdefault("resolved", []).append({
+                    "description": desc,
+                    "chapter": chapter_num,
+                })
+                # Remove from active if present
+                active = conflicts.get("active", [])
+                conflicts["active"] = [a for a in active if a.get("description", "") != desc]
+
+        plot_tracker["lastUpdated"] = now
+        self._write_json("plot_tracker.json", plot_tracker)
+
+        # Foreshadowing updates
+        fs_data = tu.get("foreshadowing_updates", {})
+        for hint in fs_data.get("hints_dropped", []):
+            fs_id = hint.get("id", "")
+            hint_text = hint.get("hint", "")
+            if not hint_text:
+                continue
+            # Find existing foreshadowing by id, or create new
+            found = False
+            for fs in plot_tracker.get("foreshadowing", []):
+                if fs.get("id") == fs_id:
+                    fs.setdefault("hints", []).append(hint_text)
+                    found = True
+                    break
+            if not found:
+                plot_tracker.setdefault("foreshadowing", []).append({
+                    "id": fs_id or f"fs_{len(plot_tracker.get('foreshadowing', [])) + 1:03d}",
+                    "content": hint_text,
+                    "planted": {"chapter": chapter_num, "description": ""},
+                    "hints": [hint_text],
+                    "plannedReveal": {"chapter": None, "description": ""},
+                    "status": "active",
+                    "importance": "medium",
+                })
+
+        for revealed in fs_data.get("revealed", []):
+            fs_id = revealed.get("id", "")
+            how = revealed.get("how", "")
+            for fs in plot_tracker.get("foreshadowing", []):
+                if fs.get("id") == fs_id:
+                    fs["status"] = "revealed"
+                    fs["plannedReveal"] = {"chapter": chapter_num, "description": how}
+                    break
+
+        plot_tracker["lastUpdated"] = now
+        self._write_json("plot_tracker.json", plot_tracker)
+
+        # Timeline updates
+        tl_data = tu.get("timeline_updates", {})
+        timeline = self._read_json("timeline.json")
+
+        time_markers = tl_data.get("time_markers", [])
+        if time_markers:
+            timeline["storyTime"]["current"] = time_markers[-1]
+
+        for travel in tl_data.get("travel_events", []):
+            from_loc = travel.get("from", "")
+            to_loc = travel.get("to", "")
+            duration = travel.get("duration", "")
+            if from_loc and to_loc:
+                route_key = f"{from_loc}→{to_loc}"
+                timeline.setdefault("timeLogic", {}).setdefault("travelTimes", {}).setdefault("routes", {})[route_key] = {
+                    "duration": duration,
+                    "chapter": chapter_num,
+                }
+
+        timeline["lastUpdated"] = now
+        self._write_json("timeline.json", timeline)
+
+        logger.info(f"Tracking updated from review for chapter {chapter_num}")
+
+    # --- L3: Independent LLM analysis ---
+
+    def analyze_development(self, llm, chapter_summaries: list[str], total_chapters: int, chapter_num: int) -> None:
+        """Call LLM to analyze character development arcs. Called every 5 chapters."""
+        # Load prompt template
+        prompt_path = Path(__file__).parent.parent / "prompts" / "tracking_analysis.txt"
+        if not prompt_path.exists():
+            logger.warning("tracking_analysis.txt not found, skipping development analysis")
+            return
+        system_prompt = prompt_path.read_text(encoding="utf-8")
+
+        # Build context from tracking data
+        char_state = self._read_json("character_state.json")
+        plot_tracker = self._read_json("plot_tracker.json")
+
+        context = {
+            "chapter_summaries": chapter_summaries[-5:],
+            "protagonist": char_state.get("protagonist", {}),
+            "active_conflicts": plot_tracker.get("conflicts", {}).get("active", []),
+            "active_foreshadowing": [f for f in plot_tracker.get("foreshadowing", [])
+                                     if f.get("status") == "planted"][:5],
+            "total_chapters": total_chapters,
+            "current_chapter": chapter_num,
+        }
+
+        user_msg = f"已完成 {chapter_num}/{total_chapters} 章。\n\n"
+        user_msg += f"章节摘要（最近5章）：\n"
+        for i, summary in enumerate(context["chapter_summaries"]):
+            user_msg += f"- {summary[:200]}\n"
+        user_msg += f"\n追踪数据：\n{json.dumps(context, ensure_ascii=False, indent=2)[:3000]}\n\n"
+        user_msg += "请分析角色成长弧线和剧情发展。"
+
+        result = llm.chat_json(system_prompt, user_msg, temperature=0.3)
+
+        if not result:
+            logger.warning("Development analysis returned empty result")
+            return
+
+        now = self._now()
+
+        # Write protagonist analysis
+        protag_analysis = result.get("protagonist_analysis", {})
+        if protag_analysis and char_state.get("protagonist"):
+            char_state = self._read_json("character_state.json")
+            dev = char_state["protagonist"].setdefault("development", {})
+            if protag_analysis.get("currentPhase"):
+                dev["currentPhase"] = protag_analysis["currentPhase"]
+            if protag_analysis.get("nextGoal"):
+                dev["nextGoal"] = protag_analysis["nextGoal"]
+            if protag_analysis.get("milestones"):
+                existing = dev.get("milestones", [])
+                existing_texts = {str(m) for m in existing}
+                for m in protag_analysis["milestones"]:
+                    m_str = f"第{m.get('chapter', '?')}章：{m.get('event', '')}"
+                    if m_str not in existing_texts:
+                        existing.append(m_str)
+                dev["milestones"] = existing
+            char_state["lastUpdated"] = now
+            self._write_json("character_state.json", char_state)
+
+        # Write supporting analysis
+        for sup_analysis in result.get("supporting_analysis", []):
+            name = sup_analysis.get("name", "")
+            if not name:
+                continue
+            char_state = self._read_json("character_state.json")
+            sup_data = char_state.get("supportingCharacters", {}).get(name)
+            if sup_data:
+                if sup_analysis.get("arc_current"):
+                    sup_data.setdefault("arc", {})["current"] = sup_analysis["arc_current"]
+                if sup_analysis.get("motivations"):
+                    sup_data["motivations"] = sup_analysis["motivations"]
+                char_state["lastUpdated"] = now
+                self._write_json("character_state.json", char_state)
+
+        # Write plot prediction
+        plot_pred = result.get("plot_prediction", {})
+        if plot_pred.get("plannedClimax"):
+            plot_tracker = self._read_json("plot_tracker.json")
+            plot_tracker.setdefault("plotlines", {}).setdefault("main", {})["plannedClimax"] = {
+                "chapter": plot_pred["plannedClimax"].get("chapter"),
+                "description": plot_pred["plannedClimax"].get("reason", ""),
+            }
+            plot_tracker["lastUpdated"] = now
+            self._write_json("plot_tracker.json", plot_tracker)
+
+        logger.info(f"Development analysis completed for chapter {chapter_num}")
+
     # --- Build tracking context for agents ---
 
     def get_tracking_context(self, current_chapter: int) -> str:
@@ -928,6 +1405,19 @@ class Tracker:
                     w_lines.append(f"- {w}")
                 parts.append("\n".join(w_lines))
 
+            # L2.3: Character detail status
+            consistency = char_state.get("consistency", {})
+            detail_lines = []
+            for trait_type, label in [("physicalTraits", "外貌特征"), ("personalityTraits", "性格特征"), ("speechPatterns", "言语模式")]:
+                traits = consistency.get(trait_type, {})
+                if traits:
+                    detail_lines.append(f"### {label}")
+                    for char_name, desc in traits.items():
+                        if desc:
+                            detail_lines.append(f"- {char_name}：{desc}")
+            if detail_lines:
+                parts.append("## 角色详细状态\n" + "\n".join(detail_lines))
+
         # Timeline
         if "timeline" not in disabled:
             timeline = self._read_json("timeline.json")
@@ -949,24 +1439,66 @@ class Tracker:
                     lines.append(f"- {a}")
                 parts.append("\n".join(lines))
 
+            # L2.3: Time constraints
+            time_logic = timeline.get("timeLogic", {})
+            constraints = time_logic.get("constraints", [])
+            routes = time_logic.get("travelTimes", {}).get("routes", {})
+            if constraints or routes:
+                lines = ["## 时间约束"]
+                for c in constraints[:5]:
+                    lines.append(f"- {c}")
+                for route, info in list(routes.items())[-5:]:
+                    if isinstance(info, dict):
+                        lines.append(f"- 旅行：{route}，耗时：{info.get('duration', '未知')}")
+                    else:
+                        lines.append(f"- 旅行：{route}，耗时：{info}")
+                parts.append("\n".join(lines))
+
         # Active foreshadowing and conflicts
+        plot_tracker = self._read_json("plot_tracker.json")
         if "worldbuilding" not in disabled:
-            plot_tracker = self._read_json("plot_tracker.json")
             foreshadowing = plot_tracker.get("foreshadowing", [])
             active_fs = [f for f in foreshadowing if isinstance(f.get("planted"), dict) and f["planted"].get("chapter") and f.get("status") not in ("revealed", "resolved")]
             if active_fs:
                 lines = ["## 活跃伏笔"]
                 for f in active_fs:
                     ch = f["planted"].get("chapter", "?")
-                    lines.append(f"- [{f.get('id', '')}] 第{ch}章埋设：{f.get('content', '')}")
+                    hint_str = ""
+                    if f.get("hints"):
+                        hint_str = f"（提示：{'; '.join(f['hints'][-3:])}）"
+                    lines.append(f"- [{f.get('id', '')}] 第{ch}章埋设：{f.get('content', '')}{hint_str}")
                 parts.append("\n".join(lines))
 
             # Active conflicts
-            conflicts = plot_tracker.get("conflicts", {}).get("active", [])
-            if conflicts:
+            conflicts = plot_tracker.get("conflicts", {})
+            active_conflicts = conflicts.get("active", [])
+            if active_conflicts:
                 lines = ["## 活跃冲突"]
-                for c in conflicts[:5]:
-                    lines.append(f"- {c}")
+                for c in active_conflicts[:5]:
+                    if isinstance(c, dict):
+                        lines.append(f"- [{c.get('type', '?')}] {c.get('description', str(c))}")
+                    else:
+                        lines.append(f"- {c}")
+                parts.append("\n".join(lines))
+
+            # L2.3: Resolved conflicts (recent 3)
+            resolved = conflicts.get("resolved", [])
+            if resolved:
+                lines = ["## 已解决冲突"]
+                for c in resolved[-3:]:
+                    if isinstance(c, dict):
+                        lines.append(f"- {c.get('description', str(c))}（第{c.get('chapter', '?')}章）")
+                    else:
+                        lines.append(f"- {c}")
+                parts.append("\n".join(lines))
+
+            # L2.3: Plot notes (plotHoles, inconsistencies)
+            notes = plot_tracker.get("notes", {})
+            note_items = notes.get("plotHoles", []) + notes.get("inconsistencies", [])
+            if note_items:
+                lines = ["## 剧情问题记录"]
+                for n in note_items[-5:]:
+                    lines.append(f"- {n}")
                 parts.append("\n".join(lines))
 
         # Relationships
@@ -983,6 +1515,17 @@ class Tracker:
                     lines.append(f"- {name}：{'；'.join(active_rels[:3])}")
             if len(lines) > 1:
                 parts.append("\n".join(lines))
+
+        # L2.3: Dynamic relations
+        dynamic = relationships.get("dynamicRelations", [])
+        if dynamic:
+            lines = ["## 动态关系变化"]
+            for d in dynamic[-5:]:
+                chars = d.get("characters", [])
+                change = d.get("change", "")
+                ch = d.get("chapter", "?")
+                lines.append(f"- 第{ch}章：{' 与 '.join(chars)} — {change}")
+            parts.append("\n".join(lines))
 
         # Strictness level
         strictness_desc = {
@@ -1002,6 +1545,34 @@ class Tracker:
                 for loc in locs[:8]:
                     atm = f"，氛围：{loc['atmosphere']}" if loc.get("atmosphere") else ""
                     lines.append(f"- {loc['name']}（{loc.get('type', '?')}）：{loc.get('function', '')}{atm}")
+                parts.append("\n".join(lines))
+
+            # L2.3: Five senses for current location
+            plot_tracker_current = self._read_json("plot_tracker.json")
+            current_loc = plot_tracker_current.get("currentState", {}).get("location", "")
+            if current_loc:
+                for loc in locs:
+                    if loc.get("name") and loc["name"] in current_loc:
+                        senses = loc.get("five_senses", {})
+                        if senses:
+                            sense_lines = [f"## 场景五感参考（{loc['name']}）"]
+                            for sense_key, sense_desc in senses.items():
+                                if sense_desc:
+                                    sense_lines.append(f"- {sense_key}：{sense_desc}")
+                            parts.append("\n".join(sense_lines))
+                            break
+
+            # L2.3: Scene atmosphere guide
+            atm_guide = loc_data.get("scene_atmosphere_guide", {})
+            if atm_guide:
+                lines = ["## 场景氛围指南"]
+                for mood, guide in atm_guide.items():
+                    if isinstance(guide, dict):
+                        words = guide.get("用词", "")
+                        focus = guide.get("重点", "")
+                        lines.append(f"- {mood}：用词「{words}」，重点「{focus}」")
+                    else:
+                        lines.append(f"- {mood}：{guide}")
                 parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

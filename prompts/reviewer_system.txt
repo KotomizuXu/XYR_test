@@ -80,10 +80,39 @@
     }
   ],
   "overall_quality": 1到10的评分,
-  "strengths": ["写得好的地方"]
+  "strengths": ["写得好的地方"],
+  "tracking_updates": {
+    "character_changes": [
+      {"name": "角色名", "field": "health|mentalState|location|alive|position", "old": "旧值", "new": "新值", "evidence": "原文依据"}
+    ],
+    "relationship_changes": [
+      {"characters": ["角色A", "角色B"], "change": "关系变化描述", "type": "personal|factional|ideological"}
+    ],
+    "conflict_updates": {
+      "new_active": [{"description": "新冲突", "type": "personal|factional|ideological"}],
+      "resolved": [{"description": "解决的冲突"}]
+    },
+    "foreshadowing_updates": {
+      "hints_dropped": [{"id": "fs_001", "hint": "提示内容"}],
+      "revealed": [{"id": "fs_001", "how": "揭示方式"}]
+    },
+    "timeline_updates": {
+      "time_markers": ["文本中的时间标记"],
+      "travel_events": [{"from": "起点", "to": "终点", "duration": "耗时"}]
+    }
+  }
 }
 
 只有当不存在 major 级别问题时才可 approved 为 true。consistency_score 根据一致性检查结果计算：无问题=100，每个note扣2分，每个warning扣5分，每个major扣15分，最低0分。
+
+## 追踪更新（tracking_updates）
+审核时必须同时识别本章中发生的追踪数据变化，填入 tracking_updates：
+- **character_changes**：角色的状态变化（健康、心理、位置、存活、身份）。只记录有明显文本依据的变化，不要推测。
+- **relationship_changes**：角色间关系的建立、变化、破裂。type 分为 personal（个人关系）、factional（阵营关系）、ideological（理念冲突）。
+- **conflict_updates**：新出现的冲突（new_active）和本章解决的冲突（resolved）。
+- **foreshadowing_updates**：本章新埋的伏笔线索（hints_dropped，尽量用已有 id，新伏笔用 fs_NNN 编号）或本章揭示的伏笔（revealed）。
+- **timeline_updates**：文本中明确提到的时间标记和旅行事件。
+如果没有检测到任何变化，各数组留空即可。
 
 ## 反AI腔检查（额外维度）
 审核时同时检查以下写作质量问题，发现则作为 warning 级别 issue 报告：

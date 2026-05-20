@@ -63,6 +63,17 @@ class NovelPipeline:
             if name in agent_map and isinstance(temp, (int, float)):
                 agent_map[name].set_temperature(float(temp))
 
+    def _apply_strictness(self, state: NovelState) -> None:
+        genre = (state.style_guide or {}).get("setting", {}).get("genre", "")
+        strictness = "strict"
+        for keyword, level in self._GENRE_STRICTNESS.items():
+            if keyword in genre:
+                strictness = level
+                break
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
+        tracker.set_strictness(strictness)
+        print(f"[追踪系统] 审核严格度：{strictness}（题材：{genre or '未识别'}）")
+
     def _handle_interrupt(self, signum, frame):
         print("\n\n收到中断信号，正在保存进度...")
         self._interrupted = True
@@ -88,7 +99,7 @@ class NovelPipeline:
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
             print(f"\n发生错误：{e}")
-            print(f"进度已保存，可使用 'continue --name \"{novel_name}\"' 继续")
+            print(f"进度已保存，可使用 'continue' 继续")
             raise
 
     def resume_novel(self, novel_name: str) -> None:
@@ -110,8 +121,15 @@ class NovelPipeline:
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
             print(f"\n发生错误：{e}")
-            print(f"进度已保存，可使用 'continue --name \"{novel_name}\"' 继续")
+            print(f"进度已保存，可使用 'continue' 继续")
             raise
+
+    # 题材 → 审核严格度映射
+    _GENRE_STRICTNESS = {
+        "悬疑": "strict", "推理": "strict", "历史": "strict", "严肃": "strict",
+        "爽文": "flexible", "复仇": "flexible", "言情": "flexible", "甜文": "flexible",
+        "虐文": "flexible", "网文": "flexible", "玄幻": "flexible", "仙侠": "flexible",
+    }
 
     def _run_pipeline(self, state: NovelState) -> None:
         # Phase 0: Styling
@@ -120,6 +138,8 @@ class NovelPipeline:
             print(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
             state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
             self._apply_style_temperatures(state.style_guide)
+            # 根据题材自动设置审核严格度
+            self._apply_strictness(state)
             state.phase = "collecting_params"
             self.state_mgr.save(state)
             print(f"[风格顾问] 风格指南已生成：{state.style_guide.get('style_name', '?')}\n")
@@ -192,10 +212,11 @@ class NovelPipeline:
 
         # Phase 2.5: Initialize tracking system (always ensure tracking files exist)
         if state.phase == "writing":
-            tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+            tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
             if not tracker._read_json("character_state.json"):
                 print("[追踪系统] 正在初始化追踪数据...")
                 tracker.init_tracking(state.world_data, state.outline, state.chapter_plans)
+                self._apply_validation_level(tracker)
                 print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络）\n")
 
         if self._interrupted:
@@ -285,6 +306,42 @@ class NovelPipeline:
         state.phase = "directing"
         self.state_mgr.save(state)
 
+        # 遗忘检测阈值
+        sug_thresholds = suggestions.get("tracking_thresholds", {})
+        rec_char = sug_thresholds.get("character", max(3, total_chapters // 3))
+        rec_plot = sug_thresholds.get("plotline", max(4, total_chapters * 2 // 5))
+        rec_foreshadow = sug_thresholds.get("foreshadowing", max(5, total_chapters // 2))
+        threshold_reason = sug_thresholds.get("reason", "")
+
+        print(f"\n  遗忘检测阈值：角色 {rec_char} 章 / 支线 {rec_plot} 章 / 伏笔 {rec_foreshadow} 章")
+        if threshold_reason:
+            print(f"     理由：{threshold_reason}")
+
+        confirm = input(f"  直接回车确认，或输入自定义值（格式：角色,支线,伏笔）：").strip()
+        if confirm:
+            parts = confirm.replace("，", ",").split(",")
+            if len(parts) == 3:
+                try:
+                    rec_char, rec_plot, rec_foreshadow = int(parts[0]), int(parts[1]), int(parts[2])
+                except ValueError:
+                    print("     格式错误，使用建议值")
+
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
+        tracker.set_threshold("character", rec_char)
+        tracker.set_threshold("plotline", rec_plot)
+        tracker.set_threshold("foreshadowing", rec_foreshadow)
+        print(f"  已设置阈值：角色 {rec_char} / 支线 {rec_plot} / 伏笔 {rec_foreshadow}")
+
+        # Disabled checks configuration
+        print("\n  可选：禁用特定检查类别（character/timeline/worldbuilding/locations）")
+        disabled_input = input("  输入要禁用的类别（逗号分隔，直接回车全部启用）：").strip()
+        if disabled_input:
+            disabled = [d.strip() for d in disabled_input.replace("，", ",").split(",") if d.strip()]
+            config = tracker._read_json("config.json")
+            config["disabled_checks"] = disabled
+            tracker._write_json("config.json", config)
+            print(f"  已禁用检查：{disabled}")
+
         print(f"\n  确认参数：{total_chapters}章，{words_min}-{words_max}字/章\n")
 
     def _get_words_range(self, state: NovelState) -> tuple[int, int]:
@@ -293,6 +350,42 @@ class NovelPipeline:
             return wp["min"], wp["max"]
         cfg = self.config["novel"]["words_per_chapter"]
         return cfg["min"], cfg["max"]
+
+    def _handle_retire(self, forgotten: dict, tracker: Tracker) -> None:
+        """Allow user to retire forgotten elements they no longer want tracked."""
+        try:
+            all_items = []
+            for char in forgotten.get("characters", []):
+                all_items.append(("characters", char["name"], f"角色「{char['name']}」"))
+            for plotline in forgotten.get("plotlines", []):
+                all_items.append(("plotlines", plotline["name"], f"支线「{plotline['name']}」"))
+            for fs in forgotten.get("foreshadowing", []):
+                content = fs.get("content", "")[:30]
+                all_items.append(("foreshadowing", fs.get("id", ""), f"伏笔「{content}...」"))
+
+            if not all_items:
+                return
+
+            print("  可选操作：输入编号退休（不再追踪）对应元素，直接回车跳过：")
+            for idx, (_, _, desc) in enumerate(all_items, 1):
+                print(f"    {idx}. 退休 {desc}")
+            choice = input("  > ").strip()
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(all_items):
+                    etype, name, desc = all_items[idx]
+                    tracker.retire_element(etype, name)
+                    print(f"  已退休：{desc}")
+        except (KeyboardInterrupt, EOFError):
+            print()
+
+    def _apply_validation_level(self, tracker: Tracker) -> None:
+        """Set validation level based on strictness config."""
+        strictness = tracker._get_strictness()
+        level = "deep" if strictness == "strict" else "standard"
+        rules = tracker._read_json("validation_rules.json")
+        rules["active_validation_level"] = level
+        tracker._write_json("validation_rules.json", rules)
 
     def _report_forgotten(self, forgotten: dict) -> None:
         print("  [遗忘检测] 发现以下元素需要关注：")
@@ -369,7 +462,7 @@ class NovelPipeline:
     def _write_chapters(self, state: NovelState) -> None:
         max_retries = self.config["novel"]["review_max_retries"]
         words_min, words_max = self._get_words_range(state)
-        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
 
         for i in range(state.current_chapter, state.total_chapters):
             if self._interrupted:
@@ -391,6 +484,8 @@ class NovelPipeline:
             forgotten = tracker.check_forgotten(ch_num)
             if forgotten:
                 self._report_forgotten(forgotten)
+                # Allow user to retire forgotten elements
+                self._handle_retire(forgotten, tracker)
                 # Inject forgotten elements into tracking context for writer awareness
                 forgotten_ctx = self._build_forgotten_context(forgotten)
                 if forgotten_ctx:
@@ -509,8 +604,21 @@ class NovelPipeline:
             summary = self.ctx_mgr.generate_chapter_summary(draft, ch_num)
             ch.summary = summary
 
-            # Update tracking data
-            tracker.update_tracking(ch_num, draft, plan)
+            # Update tracking data (pass review for L1.1 consumption)
+            before = tracker.snapshot()
+            tracker.update_tracking(ch_num, draft, plan, review=review)
+            # L2: Extract tracking_updates from reviewer output
+            if review.get("tracking_updates"):
+                tracker.update_from_review(ch_num, review)
+
+            # L3: Independent LLM analysis every 5 chapters
+            if ch_num % 5 == 0 and ch_num < state.total_chapters:
+                print(f"  [追踪] 正在分析角色成长弧线...")
+                completed_summaries = [c.summary for c in state.chapters[:i + 1] if c.summary]
+                tracker.analyze_development(self.llm, completed_summaries, state.total_chapters, ch_num)
+
+            after = tracker.snapshot()
+            tracker.log_changes_csv(ch_num, before, after)
 
             state.current_chapter = i + 1
             state.phase = "writing"
@@ -524,7 +632,7 @@ class NovelPipeline:
 
     def _edit_chapters(self, state: NovelState) -> None:
         dirs = self.state_mgr.ensure_dirs(state.novel_name)
-        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
 
         for i in range(state.current_chapter, state.total_chapters):
             if self._interrupted:
@@ -620,7 +728,7 @@ class NovelPipeline:
         self._apply_style_temperatures(state.style_guide)
 
         try:
-            tracker = Tracker(self.state_mgr.get_novel_dir(novel_name))
+            tracker = Tracker(self.state_mgr.get_novel_dir(novel_name), novel_name=novel_name)
             tracking_ctx = tracker.get_tracking_context(chapter_number)
 
             chapter_plan = state.chapter_plans[chapter_number - 1] if state.chapter_plans else {}
@@ -644,13 +752,13 @@ class NovelPipeline:
                 print("\n已取消选择，退出修订")
                 return
 
-            self._execute_revise(state, ch, draft, selected, user_feedback, chapter_plan, tracking_ctx)
+            self._execute_revise(state, ch, draft, selected, user_feedback, chapter_plan, tracking_ctx, tracker)
         except Exception as e:
             logger.error(f"Revise error: {e}")
             print(f"\n修订出错：{e}")
             raise
 
-    def _execute_revise(self, state, ch, draft, selected_idea, user_feedback, chapter_plan, tracking_ctx):
+    def _execute_revise(self, state, ch, draft, selected_idea, user_feedback, chapter_plan, tracking_ctx, tracker):
         ch_num = ch.chapter_number
         words_min, words_max = self._get_words_range(state)
 
@@ -756,8 +864,10 @@ class NovelPipeline:
 
         # Update summary and tracking
         ch.summary = self.ctx_mgr.generate_chapter_summary(final_text, ch_num)
-        tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
+        before = tracker.snapshot()
         tracker.update_tracking(ch_num, final_text, chapter_plan)
+        after = tracker.snapshot()
+        tracker.log_changes_csv(ch_num, before, after, source="revise")
 
         self.state_mgr.save(state)
         print("  修订已保存")

@@ -1046,7 +1046,13 @@
       "reason": "建议理由"
     },
     "pace_description": "一句话概括节奏建议",
-    "reward_density": "奖励/正反馈密度描述"
+    "reward_density": "奖励/正反馈密度描述",
+    "tracking_thresholds": {
+      "character": "角色遗忘阈值（整数，多少章未出场触发警告，短篇建议2-3，中篇5-8，长篇10+）",
+      "plotline": "支线停滞阈值（整数，短篇建议3-4，中篇6-8，长篇12+）",
+      "foreshadowing": "伏笔回收阈值（整数，短篇建议4-5，中篇8-10，长篇20+）",
+      "reason": "推荐理由"
+    }
   },
   "setting": {
     "genre": "识别的题材类型",

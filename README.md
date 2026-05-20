@@ -5,7 +5,7 @@
 ## 架构设计
 
 ```
-用户输入(故事灵感 + 风格描述)
+用户交互输入（故事灵感 + 风格偏好）
     ↓
 StyleAdvisorAgent → 风格指南（题材探测 + 文风检测 + 写作规范 + 动态温度）
     ↓
@@ -76,18 +76,17 @@ api:
 
 ### 3. 开始创作
 
+所有命令均为交互式，运行后程序会逐步引导输入：
+
 ```bash
-# 新建小说（交互式输入灵感和风格）
+# 创建新小说（引导输入：故事灵感、小说名称、风格偏好）
 python3 main.py new
 
-# 指定灵感、名称和风格
-python3 main.py new --idea "一个程序员穿越到修仙世界" --name "代码修仙" --style "爽文风格，快节奏"
+# 继续创作（列出已有小说，选择后继续）
+python3 main.py continue
 
-# 断点续写
-python3 main.py continue --name "代码修仙"
-
-# 修订已完成章节
-python3 main.py revise --name "代码修仙" --chapter 3
+# 修订章节（列出小说和章节，选择后输入修改意见）
+python3 main.py revise
 
 # 查看所有小说进度
 python3 main.py status
@@ -113,6 +112,7 @@ XYR_test/
 │   └── critic.py            # 修订顾问：分析修改意见 + 生成修改思路
 │
 ├── prompts/                 # System Prompt 模板（可自由修改）
+│   ├── constitution.md      # 共同创作准则（自动注入所有 Agent）
 │   ├── style_advisor_system.txt
 │   ├── director_system.txt
 │   ├── plotter_system.txt
