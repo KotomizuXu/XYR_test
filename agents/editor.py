@@ -23,7 +23,7 @@ class EditorAgent(BaseAgent):
         if prev_chapter_ending:
             user_msg += f"## 上一章结尾（参考衔接）\n{prev_chapter_ending[-500:]}\n\n"
         if next_chapter_opening:
-            user_msg += f"## 下一章开头（参考衔接）\n{next_chapter_opening[:500:]}\n\n"
+            user_msg += f"## 下一章开头（参考衔接）\n{next_chapter_opening[:500]}\n\n"
         if tracking_context:
             user_msg += f"## 追踪数据（润色时保持一致性）\n{tracking_context}\n\n"
         user_msg += "请对以上章节进行润色编辑。"

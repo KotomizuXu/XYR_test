@@ -41,12 +41,13 @@ flowchart TD
     P2 --> |chapters.json| P25
 
     subgraph P25["Phase 2.5: 追踪系统初始化"]
-        P25A[character_state.json<br/>主角/配角分离+出场追踪]
-        P25B[timeline.json<br/>故事时间+并行事件+异常]
-        P25C[plot_tracker.json<br/>主线/支线+冲突+伏笔ID]
-        P25D[relationships.json<br/>分类关系+派系+预测]
-        P25E[validation_rules.json<br/>三级验证+auto_fix]
-        P25F[config.json<br/>阈值/严格度/退役]
+        P25A[character_state.json<br/>主角/配角分离+出场追踪+一致性]
+        P25B[timeline.json<br/>故事时间+并行事件+旅行约束+异常]
+        P25C[plot_tracker.json<br/>主线/支线+冲突+伏笔ID+检查点]
+        P25D[relationships.json<br/>分类关系+派系+关系矩阵+预测]
+        P25E[validation_rules.json<br/>三级验证+auto_fix+常见错误]
+        P25F[config.json<br/>阈值/严格度/退役/禁用检查]
+        P25G[locations.json<br/>场景地点+五感+氛围指南]
     end
 
     P25 --> P3
@@ -250,11 +251,13 @@ output/<小说名>/
 ├── chapters.json             # 章节规划
 ├── tracking/                 # 全量追踪数据
 │   ├── character_state.json  #   主角/配角状态+出场追踪+一致性
-│   ├── timeline.json         #   故事时间+并行事件+异常
-│   ├── plot_tracker.json     #   主线/支线+冲突+伏笔ID
-│   ├── relationships.json    #   分类关系+派系+预测
+│   ├── timeline.json         #   故事时间+并行事件+旅行约束+异常
+│   ├── plot_tracker.json     #   主线/支线+冲突+伏笔ID+检查点
+│   ├── relationships.json    #   分类关系+派系+关系矩阵+预测
 │   ├── validation_rules.json #   三级验证+auto_fix+常见错误
-│   └── config.json           #   阈值/严格度/退役标记
+│   ├── locations.json        #   场景地点+五感+氛围指南
+│   ├── config.json           #   阈值/严格度/退役/禁用检查
+│   └── tracking_changes.csv  #   变更日志（每章追踪数据变化）
 ├── drafts/                   # 原始+修正草稿
 ├── review_reports/           # 审核报告（含consistency_score）
 ├── edited/                   # 润色后章节

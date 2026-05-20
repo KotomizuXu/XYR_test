@@ -499,14 +499,18 @@ class Tracker:
             allies, enemies, family, romantic, mentors = [], [], [], [], []
 
             if isinstance(rel_text, str) and rel_text:
+                # Split relationship text by common delimiters to get per-person segments
+                import re
+                segments = re.split(r'[，,；;。.\n]', rel_text)
                 for other in all_chars:
                     other_name = other.get("name", "")
                     if not other_name or other_name == name:
                         continue
-                    if other_name not in rel_text:
+                    # Find segments that mention this specific character
+                    matching = [s for s in segments if other_name in s]
+                    if not matching:
                         continue
-                    # Classify based on surrounding context
-                    context = rel_text.lower()
+                    context = " ".join(matching).lower()
                     if any(kw in context for kw in _ENEMY_KEYWORDS):
                         enemies.append(other_name)
                     elif any(kw in context for kw in _ROMANTIC_KEYWORDS):
@@ -708,12 +712,15 @@ class Tracker:
         self._write_json("locations.json", location_data)
 
     def _init_config(self) -> None:
+        existing = self._read_json("config.json")
         config = {
             "thresholds": dict(DEFAULT_THRESHOLDS),
-            "strictness": "strict",
+            "strictness": existing.get("strictness", "strict"),
             "retired": {"characters": [], "plotlines": [], "foreshadowing": []},
-            "disabled_checks": [],
+            "disabled_checks": existing.get("disabled_checks", []),
         }
+        if existing.get("thresholds"):
+            config["thresholds"].update(existing["thresholds"])
         self._write_json("config.json", config)
 
     # --- Snapshot & CSV change log ---
@@ -930,8 +937,6 @@ class Tracker:
     def _consume_review(self, chapter_num: int, review: dict) -> None:
         """Extract data from reviewer's existing output into dead tracking fields."""
         consistency = review.get("consistency_checks", {})
-        if not consistency:
-            return
 
         # Character issues → consistency.warnings + physicalTraits + personalityTraits
         char_state = self._read_json("character_state.json")
@@ -1410,7 +1415,7 @@ class Tracker:
                     "planted": {"chapter": chapter_num, "description": ""},
                     "hints": [hint_text],
                     "plannedReveal": {"chapter": None, "description": ""},
-                    "status": "active",
+                    "status": "planted",
                     "importance": "medium",
                 })
 

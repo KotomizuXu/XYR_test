@@ -591,7 +591,7 @@ class NovelPipeline:
                     applied = []
                     for fix in auto_fixes:
                         if fix.get("confidence", 0) >= 0.9 and fix.get("original") and fix.get("suggested"):
-                            draft = draft.replace(fix["original"], fix["suggested"])
+                            draft = draft.replace(fix["original"], fix["suggested"], 1)
                             applied.append(f"'{fix['original']}' → '{fix['suggested']}'")
                     if applied:
                         draft_path.write_text(draft, encoding="utf-8")

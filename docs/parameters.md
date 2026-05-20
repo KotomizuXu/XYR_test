@@ -203,7 +203,6 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 输出块 | 数据源 | 消费者 |
 |--------|--------|--------|
 | 角色详细状态 | `consistency.physicalTraits/personalityTraits/speechPatterns` | writer, editor |
-| 角色详细状态 | `consistency.physicalTraits/personalityTraits/speechPatterns` | writer, editor |
 | 已解决冲突 | `plot_tracker.conflicts.resolved`（最近 3 条） | writer |
 | 剧情问题记录 | `plot_tracker.notes.plotHoles + inconsistencies` | writer, reviewer |
 | 动态关系变化 | `relationships.dynamicRelations`（最近 5 条） | writer, editor |
@@ -251,3 +250,19 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | Critic 章节截断 | `8000` 字 | critic.py |
 | 场景氛围指南 | 4 种（欢快/紧张/神秘/浪漫） | tracker.py |
 | L3 分析频率 | 每 5 章 | pipeline.py `ch_num % 5 == 0` |
+
+---
+
+## 九、已修复问题记录
+
+以下问题在 2026-05-20 代码审查中发现并修复：
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #1 | 严重 | `_apply_strictness` 设置的审核严格度在 `_init_config` 中被覆盖丢失 | tracker.py `_init_config` |
+| #2 | 严重 | `_consume_review` 当 `consistency_checks` 为空时提前返回，跳过 issues 和 auto_fix 处理 | tracker.py `_consume_review` |
+| #3 | 中等 | `_init_relationships` 关系分类检查整段文本导致错误分类 | tracker.py `_init_relationships`（改用分句匹配） |
+| #4 | 中等 | Style advisor prompt 缺少 `critic` 温度推荐，CriticAgent 永远不会获得动态温度 | prompts/style_advisor_system.txt |
+| #5 | 中等 | `update_from_review` 新建伏笔状态为 `active` 而非 `planted`，导致遗忘检测永远不触发 | tracker.py `update_from_review` |
+| #6 | 轻微 | `auto_fix_suggestions` 用 `str.replace()` 替换所有匹配而非仅第一个 | pipeline.py `_write_chapters`（改为 `replace(..., 1)`） |
+| #7 | 轻微 | editor.py 切片语法 `[:500:]` 多余冒号 | agents/editor.py |
