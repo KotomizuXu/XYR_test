@@ -111,20 +111,20 @@ class ContextManager:
 
         kept_lines = []
 
-        # Tier 1: last 3 chapters — full summary
-        tier1 = summaries[-3:] if total >= 3 else summaries
-        tier1_start = total - len(tier1) + 1
-        for idx, s in enumerate(tier1, tier1_start):
-            kept_lines.append(f"第{idx}章摘要：{s}")
-
-        # Tier 2: chapters 4-10 from end — one-sentence condensed
+        # Tier 2: chapters 4-10 from end — one-sentence condensed (drop first)
         tier2 = summaries[max(0, total - 10): max(0, total - 3)]
         tier2_start = max(0, total - 10) + 1
         for idx, s in enumerate(tier2, tier2_start):
             short = s[:60] + "…" if len(s) > 60 else s
             kept_lines.append(f"第{idx}章（简）：{short}")
 
-        # Check budget; if still over, drop tier2 entries from oldest
+        # Tier 1: last 3 chapters — full summary (drop last, i.e. keep longest)
+        tier1 = summaries[-3:] if total >= 3 else summaries
+        tier1_start = total - len(tier1) + 1
+        for idx, s in enumerate(tier1, tier1_start):
+            kept_lines.append(f"第{idx}章摘要：{s}")
+
+        # Check budget; pop(0) removes tier2 (older) first, protecting tier1 (newest)
         while kept_lines and sum(len(l) for l in kept_lines) + fixed_len > MAX_CONTEXT_CHARS:
             kept_lines.pop(0)
 

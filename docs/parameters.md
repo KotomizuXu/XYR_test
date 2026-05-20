@@ -266,3 +266,11 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #5 | 中等 | `update_from_review` 新建伏笔状态为 `active` 而非 `planted`，导致遗忘检测永远不触发 | tracker.py `update_from_review` |
 | #6 | 轻微 | `auto_fix_suggestions` 用 `str.replace()` 替换所有匹配而非仅第一个 | pipeline.py `_write_chapters`（改为 `replace(..., 1)`） |
 | #7 | 轻微 | editor.py 切片语法 `[:500:]` 多余冒号 | agents/editor.py |
+| #8 | 严重 | `PlotAgent._agent_name()` 返回 `"plot"` 而非 `"plotter"`，导致配置映射和 STYLE_FIELDS 过滤全部失效 | agents/base.py `_AGENT_CONFIG_KEYS`（`"plotagent"` → `"plot"`） |
+| #9 | 严重 | `_truncate_context` 中 `pop(0)` 优先删除最新3章摘要而非最旧的压缩版，与设计意图完全相反 | context_manager.py `_truncate_context`（调换 tier1/tier2 入队顺序） |
+| #10 | 中等 | `NovelState.__post_init__` 每次加载都覆盖 `updated_at`，导致磁盘上的时间戳丢失 | state_manager.py `__post_init__`（仅在新建实例时设置） |
+| #11 | 中等 | `revise_chapter` 中 `chapter_plans[chapter_number - 1]` 无边界检查，可能 IndexError | pipeline.py `revise_chapter`（添加索引范围保护） |
+| #12 | 中等 | `style_advisor.py` 未处理 `chat_json` 返回 list 的情况，后续 `.get()` 调用会 AttributeError | agents/style_advisor.py `run`（添加类型检查） |
+| #13 | 中等 | `llm_client.py` 的 `chat()` 末尾 `return text` 是死代码且 `text` 变量可能未绑定 | llm_client.py `chat`（改为 `raise RuntimeError`） |
+| #14 | 中等 | `reviewer.py` 世界观数据截断到 2000 字时可能截断在 JSON 结构中间 | agents/reviewer.py（截断后追加提示文字） |
+| #15 | 轻微 | `tracker.py` 中 `import re` 放在函数体内两处，应移至文件顶部 | tracker.py（统一移至顶部 import 区域） |

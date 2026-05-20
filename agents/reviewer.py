@@ -17,7 +17,10 @@ class ReviewerAgent(BaseAgent):
             f"## 章节正文\n{chapter_text}\n\n"
         )
         if world_data:
-            user_msg += f"## 世界观参考\n{json.dumps(world_data, ensure_ascii=False, indent=2)[:2000]}\n\n"
+            world_str = json.dumps(world_data, ensure_ascii=False, indent=2)
+            if len(world_str) > 2000:
+                world_str = world_str[:2000] + "\n...(已截断)"
+            user_msg += f"## 世界观参考\n{world_str}\n\n"
         if tracking_context:
             user_msg += f"## 追踪数据（请交叉校验一致性）\n{tracking_context}\n\n"
 

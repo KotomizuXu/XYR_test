@@ -731,7 +731,8 @@ class NovelPipeline:
             tracker = Tracker(self.state_mgr.get_novel_dir(novel_name), novel_name=novel_name)
             tracking_ctx = tracker.get_tracking_context(chapter_number)
 
-            chapter_plan = state.chapter_plans[chapter_number - 1] if state.chapter_plans else {}
+            idx = chapter_number - 1
+            chapter_plan = state.chapter_plans[idx] if state.chapter_plans and 0 <= idx < len(state.chapter_plans) else {}
 
             print("  [修订顾问] 正在分析修改意见...")
             ideas = self.critic.run(

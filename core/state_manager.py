@@ -41,8 +41,10 @@ class NovelState:
 
     def __post_init__(self):
         if not self.created_at:
-            self.created_at = datetime.now().isoformat()
-        self.updated_at = datetime.now().isoformat()
+            now = datetime.now().isoformat()
+            self.created_at = now
+            if not self.updated_at:
+                self.updated_at = now
 
 
 class StateManager:

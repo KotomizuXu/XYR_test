@@ -3,6 +3,7 @@
 import csv
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -500,7 +501,6 @@ class Tracker:
 
             if isinstance(rel_text, str) and rel_text:
                 # Split relationship text by common delimiters to get per-person segments
-                import re
                 segments = re.split(r'[，,；;。.\n]', rel_text)
                 for other in all_chars:
                     other_name = other.get("name", "")
@@ -1209,7 +1209,6 @@ class Tracker:
         issues = []
         rules = self._SENTENCE_RULES
         # Split text into sentences (Chinese-aware: split on 。！？)
-        import re
         sentences = [s.strip() for s in re.split(r'[。！？]', text) if s.strip()]
         if len(sentences) < 3:
             return issues

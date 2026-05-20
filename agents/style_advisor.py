@@ -19,5 +19,8 @@ class StyleAdvisorAgent(BaseAgent):
         result = self.llm.chat_json(
             self.system_prompt, user_msg, temperature=self._temperature()
         )
+        if not isinstance(result, dict):
+            logger.error(f"StyleAdvisor: expected dict, got {type(result).__name__}")
+            return {}
         logger.info(f"StyleAdvisor: done. Style name: {result.get('style_name', '?')}")
         return result

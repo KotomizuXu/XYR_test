@@ -149,7 +149,7 @@ class LLMClient:
                 else:
                     raise
 
-        return text
+        raise RuntimeError("Unexpected end of retry loop")
 
     def chat_json(
         self,
