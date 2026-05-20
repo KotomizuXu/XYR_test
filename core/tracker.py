@@ -93,7 +93,7 @@ class Tracker:
             characters = list(characters.values()) if characters else []
         characters = [c for c in characters if isinstance(c, dict)]
         # Fallback: treat first character as protagonist if none have role field
-        protagonists = [c for c in characters if c.get("role", "") in ("主角", "主人公")]
+        protagonists = [c for c in characters if c.get("role", "") in ("主角", "主人公", "protagonist")]
         if not protagonists and characters:
             protagonists = [characters[0]]
         supporting = [c for c in characters if c not in protagonists]
