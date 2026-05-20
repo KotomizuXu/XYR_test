@@ -117,7 +117,7 @@ class LLMClient:
         max_tokens: int | None = None,
         max_retries: int = 3,
     ) -> str:
-        """Single-turn chat with retry logic. Retries from scratch on truncation."""
+        """Single-turn chat. Auto-continues on truncation, retries on API errors."""
         temp = temperature if temperature is not None else self.default_temperature
         tokens = max_tokens if max_tokens is not None else self.default_max_tokens
 
@@ -130,8 +130,8 @@ class LLMClient:
                 text = response.content[0].text
 
                 if response.stop_reason == "max_tokens":
-                    logger.warning(f"Response truncated at {len(text)} chars, retrying from scratch...")
-                    continue
+                    logger.warning(f"Response truncated at {len(text)} chars, requesting continuation...")
+                    text = self._continue_text(system_prompt, user_message, text, temp, tokens)
 
                 return text
             except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
@@ -149,7 +149,6 @@ class LLMClient:
                 else:
                     raise
 
-        logger.warning("Max retries reached, returning last response as-is")
         return text
 
     def chat_json(
@@ -192,6 +191,25 @@ class LLMClient:
             if response.stop_reason != "max_tokens":
                 break
             logger.warning("Continuation still truncated, requesting more...")
+            messages.append({"role": "assistant", "content": continuation})
+            messages.append({"role": "user", "content": "继续："})
+        return text
+
+    def _continue_text(self, system_prompt: str, user_message: str, existing_text: str, temperature: float, max_tokens: int, max_continuations: int = 3) -> str:
+        """Continue a truncated text response."""
+        messages = [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": existing_text},
+            {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
+        ]
+        text = existing_text
+        for _ in range(max_continuations):
+            response = self._call_api(system_prompt, messages, temperature, max_tokens, "续写中")
+            continuation = response.content[0].text
+            text += continuation
+            if response.stop_reason != "max_tokens":
+                break
+            logger.warning("Text continuation still truncated, requesting more...")
             messages.append({"role": "assistant", "content": continuation})
             messages.append({"role": "user", "content": "继续："})
         return text

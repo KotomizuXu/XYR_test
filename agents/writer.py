@@ -55,7 +55,7 @@ class WriterAgent(BaseAgent):
                     {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
                 ],
                 temperature=self._temperature(),
-                max_tokens=4096,
+                max_tokens=16384,
             )
             text = text + continuation
 

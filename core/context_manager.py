@@ -42,6 +42,10 @@ FULL_CONTEXT_TEMPLATE = """## 世界观与角色参考
 ## 当前章节剧情要点
 {current_plan}"""
 
+# Rough char budget: leave room for output within 128K context
+# Chinese ~1.5 token/char on average
+MAX_CONTEXT_CHARS = 60000
+
 
 class ContextManager:
     def __init__(self, llm_client, config: dict):
@@ -72,6 +76,50 @@ class ContextManager:
         current_plan = self._format_chapter_plan(current_chapter_plan)
 
         if tracking_context:
+            result = FULL_CONTEXT_TEMPLATE.format(
+                world_ref=world_ref,
+                outline_ref=outline_ref,
+                summaries=summaries_text,
+                tracking_context=tracking_context,
+                current_plan=current_plan,
+            )
+        else:
+            result = CONTEXT_TEMPLATE.format(
+                world_ref=world_ref,
+                outline_ref=outline_ref,
+                summaries=summaries_text,
+                current_plan=current_plan,
+            )
+
+        # Truncate if context exceeds budget
+        if len(result) > MAX_CONTEXT_CHARS:
+            logger.warning(f"Context too long ({len(result)} chars), truncating summaries")
+            result = self._truncate_context(result, completed_summaries, world_ref, outline_ref, tracking_context, current_chapter_plan)
+
+        return result
+
+    def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict) -> str:
+        # Strategy: keep recent summaries only, drop oldest first
+        fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 200
+        budget = MAX_CONTEXT_CHARS - fixed_len
+
+        # Add summaries from newest to oldest until budget runs out
+        kept = []
+        for s in reversed(summaries):
+            line = f"第{len(summaries) - len(kept)}章摘要：{s}"
+            if budget - len(line) - len(kept) * 2 < 0:
+                break
+            kept.insert(0, line)
+            budget -= len(line) + 2
+
+        if len(kept) < len(summaries):
+            dropped = len(summaries) - len(kept)
+            kept.insert(0, f"（前{dropped}章摘要已省略，仅保留最近{len(kept)}章）")
+
+        summaries_text = "\n\n".join(kept)
+        current_plan = self._format_chapter_plan(current_plan)
+
+        if tracking_context:
             return FULL_CONTEXT_TEMPLATE.format(
                 world_ref=world_ref,
                 outline_ref=outline_ref,
@@ -79,7 +127,6 @@ class ContextManager:
                 tracking_context=tracking_context,
                 current_plan=current_plan,
             )
-
         return CONTEXT_TEMPLATE.format(
             world_ref=world_ref,
             outline_ref=outline_ref,
