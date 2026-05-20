@@ -45,6 +45,7 @@ class NovelPipeline:
         self.critic = CriticAgent(self.llm, self.config)
 
         self._interrupted = False
+        self._current_state = None
         signal.signal(signal.SIGINT, self._handle_interrupt)
 
     def _apply_style_temperatures(self, style_guide: dict):
@@ -77,6 +78,25 @@ class NovelPipeline:
     def _handle_interrupt(self, signum, frame):
         print("\n\n收到中断信号，正在保存进度...")
         self._interrupted = True
+        if self._current_state:
+            self.state_mgr.save(self._current_state)
+            print(f"进度已保存（阶段: {self._current_state.phase}）")
+            print("使用 'python3 main.py continue' 恢复创作")
+
+    def _checkpoint(self, state: NovelState, next_action: str) -> bool:
+        """在重操作前保存状态并询问用户是否继续。返回 True 表示继续，False 表示暂停。"""
+        self.state_mgr.save(state)
+        print(f"\n{'='*50}")
+        print(f"进度已保存。下一步：{next_action}")
+        try:
+            ans = input("按回车继续，输入 q 保存并退出：").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            ans = "q"
+        if ans == "q":
+            self._interrupted = True
+            return False
+        return True
 
     def start_new_novel(self, story_idea: str, novel_name: str, style: str | None = None) -> None:
         # Initialize state
@@ -132,13 +152,13 @@ class NovelPipeline:
     }
 
     def _run_pipeline(self, state: NovelState) -> None:
+        self._current_state = state
+
         # Phase 0: Styling
         if state.phase == "styling":
-            style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
-            print(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
-            state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
+            print(f"[风格顾问] 正在根据风格描述生成指南：{state.style_description or '传统文学风格，注重文笔和人物塑造'}")
+            state.style_guide = self.style_advisor.run(state.style_description or "传统文学风格", story_idea=state.story_idea)
             self._apply_style_temperatures(state.style_guide)
-            # 根据题材自动设置审核严格度
             self._apply_strictness(state)
             state.phase = "collecting_params"
             self.state_mgr.save(state)
@@ -156,17 +176,17 @@ class NovelPipeline:
 
         # Phase 1: Directing
         if state.phase == "directing":
+            if not self._checkpoint(state, "构建世界观和大纲（耗时较长）"):
+                return
             print("[导演] 正在构建世界观和大纲...")
             result = self.director.run(state.story_idea, state.total_chapters, style_guide=state.style_guide)
             state.world_data = result.get("world", {})
             state.outline = result.get("outline", {})
-            # Save character data into world_data for reference
             if "characters" in result:
                 state.world_data["characters"] = result["characters"]
             if "style" in result:
                 state.outline["style"] = result["style"]
 
-            # Save intermediate files
             novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
             (novel_dir / "world.json").write_text(
                 json.dumps(result.get("world", {}), ensure_ascii=False, indent=2), encoding="utf-8"
@@ -184,6 +204,8 @@ class NovelPipeline:
 
         # Phase 2: Plotting
         if state.phase == "plotting":
+            if not self._checkpoint(state, f"拆分 {state.total_chapters} 章剧情计划（耗时较长）"):
+                return
             print("[编剧] 正在拆分章节和规划剧情...")
             chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters, style_guide=state.style_guide)
             state.chapter_plans = chapter_plans
@@ -193,7 +215,6 @@ class NovelPipeline:
                 json.dumps(chapter_plans, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
-            # Initialize chapter states
             state.chapters = []
             for plan in chapter_plans:
                 state.chapters.append(ChapterState(
@@ -224,6 +245,8 @@ class NovelPipeline:
 
         # Phase 3: Writing + Reviewing loop
         if state.phase == "writing":
+            if not self._checkpoint(state, f"逐章写作 {state.total_chapters} 章（每章 3-5 分钟）"):
+                return
             self._write_chapters(state)
 
         if self._interrupted:
@@ -231,6 +254,8 @@ class NovelPipeline:
 
         # Phase 4: Editing
         if state.phase == "editing":
+            if not self._checkpoint(state, f"逐章润色 {state.total_chapters} 章"):
+                return
             self._edit_chapters(state)
 
         # Phase 5: Combine final output

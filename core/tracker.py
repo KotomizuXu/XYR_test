@@ -341,6 +341,16 @@ class Tracker:
             }
 
         all_names = [c.get("name", "") for c in all_chars if c.get("name")]
+        psychology = {}
+        for ch in all_chars:
+            ch_name = ch.get("name", "")
+            if ch_name and any(ch.get(k) for k in ("false_belief", "want", "need", "ghost")):
+                psychology[ch_name] = {
+                    "false_belief": ch.get("false_belief", ""),
+                    "want": ch.get("want", ""),
+                    "need": ch.get("need", ""),
+                    "ghost": ch.get("ghost", ""),
+                }
         state = {
             "novel": self.novel_name,
             "lastUpdated": now,
@@ -358,6 +368,7 @@ class Tracker:
                 "speechPatterns": {},
                 "warnings": [],
             },
+            "psychology": psychology,
         }
 
         # Pre-populate consistency from world_data
@@ -437,12 +448,27 @@ class Tracker:
         fs_idx = 1
         for plan in chapter_plans:
             for fs in plan.get("foreshadowing", []):
+                if isinstance(fs, dict):
+                    content = fs.get("content", str(fs))
+                    visibility = fs.get("visibility", "subtle")
+                    planned_reveal = fs.get("planned_reveal")
+                else:
+                    content = str(fs)
+                    visibility = "subtle"
+                    planned_reveal = None
+                reveal_chapter = None
+                if planned_reveal:
+                    try:
+                        reveal_chapter = int(str(planned_reveal))
+                    except (ValueError, TypeError):
+                        pass
                 foreshadowing.append({
                     "id": f"fs_{fs_idx:03d}",
-                    "content": fs,
+                    "content": content,
+                    "visibility": visibility,
                     "planted": {"chapter": plan.get("chapter_number"), "description": ""},
                     "hints": [],
-                    "plannedReveal": {"chapter": None, "description": ""},
+                    "plannedReveal": {"chapter": reveal_chapter, "description": ""},
                     "status": "active",
                     "importance": "medium",
                 })
@@ -1631,6 +1657,25 @@ class Tracker:
                             detail_lines.append(f"- {char_name}：{desc}")
             if detail_lines:
                 parts.append("## 角色详细状态\n" + "\n".join(detail_lines))
+
+            # Character psychology (false_belief/want/need/ghost)
+            psychology = char_state.get("psychology", {})
+            if psychology:
+                psy_lines = ["## 角色心理深度"]
+                for char_name, psy in psychology.items():
+                    entries = []
+                    if psy.get("false_belief"):
+                        entries.append(f"错误信念：{psy['false_belief']}")
+                    if psy.get("want"):
+                        entries.append(f"表面渴望：{psy['want']}")
+                    if psy.get("need"):
+                        entries.append(f"深层需求：{psy['need']}")
+                    if psy.get("ghost"):
+                        entries.append(f"心魔/旧伤：{psy['ghost']}")
+                    if entries:
+                        psy_lines.append(f"- {char_name}：" + "；".join(entries))
+                if len(psy_lines) > 1:
+                    parts.append("\n".join(psy_lines))
 
         # Timeline
         if "timeline" not in disabled:

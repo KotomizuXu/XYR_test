@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "chinese-novelist": {
+      "source": "penglonghuang/chinese-novelist-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "dee48ec34a5d100bba890cba33110de80d516eb2791a586c900b14b0711bff11"
+    },
+    "novel-architect": {
+      "source": "junaid18183/novel-architect-skills",
+      "sourceType": "github",
+      "skillPath": "skills/novel-architect/SKILL.md",
+      "computedHash": "08e9a23e2aee1a5344c69bc6620079c01d4cd2357b9ff5b317e9f2314b465369"
+    }
+  }
+}
