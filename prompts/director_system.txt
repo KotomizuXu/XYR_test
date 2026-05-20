@@ -10,7 +10,33 @@
     "rules": "世界的核心规则/体系（如修炼体系、科技水平等）",
     "unique_elements": ["独特元素1", "独特元素2"],
     "tone": "整体基调（如热血、温馨、暗黑等）",
-    "narrative_perspective": "叙事视角（第一人称/第三人称有限/第三人称全知）"
+    "narrative_perspective": "叙事视角（第一人称/第三人称有限/第三人称全知）",
+    "geography": {
+      "main_locations": [
+        {"name": "地点名", "description": "简述", "climate": "气候", "terrain": "地形"}
+      ],
+      "travel_routes": [
+        {"from": "出发地", "to": "目的地", "distance": "距离/耗时"}
+      ]
+    },
+    "social_structure": {
+      "political_system": "政治体系",
+      "economy": "经济形态",
+      "social_classes": "社会阶层",
+      "culture": "文化特点"
+    },
+    "factions": [
+      {"name": "势力名", "nature": "性质", "purpose": "宗旨", "scale": "规模", "key_figures": ["重要人物"]}
+    ],
+    "history": [
+      {"event": "事件名", "time": "时间", "cause": "起因", "result": "结果", "impact": "影响"}
+    ],
+    "daily_life": {
+      "clothing_food": "衣食",
+      "etiquette": "礼仪",
+      "festivals": "节日",
+      "currency": "货币制度"
+    }
   },
   "characters": [
     {
@@ -20,7 +46,54 @@
       "personality": "性格特点（3-5个关键词+简短描述）",
       "motivation": "核心动机",
       "arc": "人物成长弧线",
-      "relationships": "与其他角色的关系"
+      "relationships": "与其他角色的关系",
+      "appearance": {
+        "height_build": "身高体型",
+        "features": "相貌特点",
+        "clothing_style": "穿着风格",
+        "distinctive_marks": "特殊标记（疤痕/纹身/饰品等）"
+      },
+      "abilities": {
+        "special": "特殊能力",
+        "skills": "技能特长",
+        "weaknesses": "弱点"
+      },
+      "background": {
+        "childhood": "童年经历",
+        "growth": "成长历程",
+        "key_events": "重要事件",
+        "turning_point": "人生转折"
+      },
+      "growth_plan": {
+        "early": "初期状态",
+        "mid": "中期发展",
+        "late": "后期蜕变",
+        "final": "最终形态"
+      },
+      "voice": {
+        "tone": "语调（平和/激昂/冷静/活泼）",
+        "catchphrases": ["口头禅1", "口头禅2"],
+        "address_style": {"elders": "对长辈称呼", "peers": "对平辈称呼", "self": "自称"},
+        "emotional_expressions": {"happy": "高兴时", "angry": "愤怒时", "sad": "悲伤时", "nervous": "紧张时"}
+      }
+    }
+  ],
+  "locations": [
+    {
+      "name": "场景名称",
+      "type": "室内/室外/自然/人工",
+      "scale": "大型/中型/小型",
+      "position": "相对位置",
+      "first_appearance": "首次出现章节",
+      "five_senses": {
+        "visual": "视觉元素（建筑/色彩/光线）",
+        "auditory": "听觉元素（环境音/特殊声音）",
+        "olfactory": "嗅觉元素（气味）",
+        "tactile": "触觉元素（温度/湿度/材质）"
+      },
+      "function": "剧情功能",
+      "atmosphere": "氛围（紧张/轻松/神秘/浪漫）",
+      "related_characters": ["相关人物"]
     }
   ],
   "outline": {

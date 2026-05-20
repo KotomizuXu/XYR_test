@@ -64,3 +64,6 @@ ENV/
 
 # Novel Agent output
 output/
+
+# Referenced skills (cloned repo, not for tracking)
+referenced_skills/

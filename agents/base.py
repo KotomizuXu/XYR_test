@@ -35,7 +35,13 @@ class BaseAgent(ABC):
 
     def _load_prompt(self) -> str:
         path = PROMPTS_DIR / self.PROMPT_TEMPLATE
-        return path.read_text(encoding="utf-8")
+        prompt = path.read_text(encoding="utf-8")
+        # Inject constitution at the top
+        constitution_path = PROMPTS_DIR / "constitution.md"
+        if constitution_path.exists():
+            constitution = constitution_path.read_text(encoding="utf-8")
+            prompt = f"{prompt}\n\n## 创作准则（必须遵循）\n{constitution}"
+        return prompt
 
     def _agent_name(self) -> str:
         raw = self.__class__.__name__.replace("Agent", "").lower()

@@ -83,6 +83,7 @@ class Tracker:
         self._init_plot_tracker(outline, chapter_plans)
         self._init_relationships(world_data)
         self._init_validation_rules(world_data)
+        self._init_locations(world_data)
         self._init_config()
         logger.info("Tracking system initialized")
 
@@ -273,6 +274,12 @@ class Tracker:
         all_chars, _, _ = self._parse_characters(world_data)
         now = self._now()
 
+        # Keywords for classifying relationship types
+        _ENEMY_KEYWORDS = ["敌人", "仇人", "对手", "反派", "对立", "死对头", "宿敌"]
+        _ROMANTIC_KEYWORDS = ["爱", "恋", "情", "妻", "夫", "男友", "女友", "暗恋", "CP", "暧昧", "情人", "爱人"]
+        _FAMILY_KEYWORDS = ["父", "母", "兄", "弟", "姐", "妹", "家人", "亲人", "父亲", "母亲", "哥哥", "弟弟", "姐姐", "妹妹", "儿子", "女儿", "叔", "伯", "姑", "姨", "舅"]
+        _MENTOR_KEYWORDS = ["师", "导师", "师父", "老师", "前辈", "教导", "传授"]
+
         characters = {}
         for ch in all_chars:
             name = ch.get("name", "")
@@ -285,7 +292,21 @@ class Tracker:
             if isinstance(rel_text, str) and rel_text:
                 for other in all_chars:
                     other_name = other.get("name", "")
-                    if other_name and other_name != name and other_name in rel_text:
+                    if not other_name or other_name == name:
+                        continue
+                    if other_name not in rel_text:
+                        continue
+                    # Classify based on surrounding context
+                    context = rel_text.lower()
+                    if any(kw in context for kw in _ENEMY_KEYWORDS):
+                        enemies.append(other_name)
+                    elif any(kw in context for kw in _ROMANTIC_KEYWORDS):
+                        romantic.append(other_name)
+                    elif any(kw in context for kw in _FAMILY_KEYWORDS):
+                        family.append(other_name)
+                    elif any(kw in context for kw in _MENTOR_KEYWORDS):
+                        mentors.append(other_name)
+                    else:
                         allies.append(other_name)
 
             characters[name] = {
@@ -301,11 +322,25 @@ class Tracker:
                 "dynamicRelations": [],
             }
 
+        # Extract factions from world_data
+        factions = {}
+        for faction in world_data.get("factions", []):
+            if isinstance(faction, dict) and faction.get("name"):
+                factions[faction["name"]] = {
+                    "description": faction.get("purpose", faction.get("nature", "")),
+                    "leader": "",
+                    "members": faction.get("key_figures", []),
+                    "goals": faction.get("purpose", ""),
+                    "alliedWith": [],
+                    "opposedTo": [],
+                    "status": "active",
+                }
+
         relationships = {
             "novel": self.novel_name,
             "lastUpdated": now,
             "characters": characters,
-            "factions": {},
+            "factions": factions,
             "relationshipMatrix": {"matrix": {}},
             "conflicts": {
                 "personal": [],
@@ -410,6 +445,38 @@ class Tracker:
         }
         self._write_json("validation_rules.json", rules)
 
+    def _init_locations(self, world_data: dict) -> None:
+        """Initialize location tracking from world_data.locations."""
+        now = self._now()
+        locations_data = world_data.get("locations", [])
+        locations = []
+        for loc in locations_data:
+            if isinstance(loc, dict) and loc.get("name"):
+                locations.append({
+                    "name": loc.get("name", ""),
+                    "type": loc.get("type", ""),
+                    "scale": loc.get("scale", ""),
+                    "position": loc.get("position", ""),
+                    "first_appearance": loc.get("first_appearance", ""),
+                    "five_senses": loc.get("five_senses", {}),
+                    "function": loc.get("function", ""),
+                    "atmosphere": loc.get("atmosphere", ""),
+                    "related_characters": loc.get("related_characters", []),
+                    "events": [],
+                })
+        location_data = {
+            "novel": self.novel_name,
+            "lastUpdated": now,
+            "locations": locations,
+            "scene_atmosphere_guide": {
+                "欢快": {"用词": "明亮、温暖、生机", "重点": "阳光、笑声、色彩"},
+                "紧张": {"用词": "阴暗、压抑、不安", "重点": "阴影、寂静、细节"},
+                "神秘": {"用词": "朦胧、诡异、未知", "重点": "雾气、光影、声响"},
+                "浪漫": {"用词": "柔和、温馨、梦幻", "重点": "月光、花香、细语"},
+            },
+        }
+        self._write_json("locations.json", location_data)
+
     def _init_config(self) -> None:
         config = {
             "thresholds": dict(DEFAULT_THRESHOLDS),
@@ -463,18 +530,23 @@ class Tracker:
         self._write_json("character_state.json", char_state)
         report["characters_updated"] = updated_chars
 
-        # Update timeline
-        timeline = self._read_json("timeline.json")
-        for event in timeline.get("events", []):
-            if event.get("chapter") == chapter_num:
-                event["event"] = chapter_plan.get("title", "") or event.get("event", "")
-                event["participants"] = updated_chars
-        timeline["lastUpdated"] = now
-        self._write_json("timeline.json", timeline)
+        # --- All tracking updates consolidated below ---
 
-        # Update plot tracker
+        # Update plot_tracker: advance currentNode, update notes from plan
         plot_tracker = self._read_json("plot_tracker.json")
         plot_tracker["currentState"]["chapter"] = chapter_num
+        # Update currentNode based on chapter title
+        title = chapter_plan.get("title", "")
+        if title:
+            plot_tracker["plotlines"]["main"]["currentNode"] = title
+            plot_tracker["plotlines"]["main"].setdefault("completedNodes", []).append(title)
+        # Extract subplot progress from plan's active_plotlines
+        for line in chapter_plan.get("active_plotlines", []):
+            line_str = str(line)
+            for subplot in plot_tracker.get("plotlines", {}).get("subplots", []):
+                if subplot.get("name", "") in line_str:
+                    subplot["currentNode"] = title
+                    subplot["lastUpdated"] = chapter_num
         # Mark foreshadowing items planted in this chapter
         for fs in plot_tracker.get("foreshadowing", []):
             planted_ch = fs.get("planted", {})
@@ -484,39 +556,56 @@ class Tracker:
         plot_tracker["lastUpdated"] = now
         self._write_json("plot_tracker.json", plot_tracker)
 
-        # Update relationships: co-appearance history and dynamic relations
-        relationships = self._read_json("relationships.json")
-        if updated_chars:
-            # Record co-appearance as relationship history
-            changes = []
-            for j, name_a in enumerate(updated_chars):
-                for name_b in updated_chars[j + 1:]:
-                    changes.append({
-                        "type": "co-appearance",
-                        "characters": [name_a, name_b],
-                        "relation": f"第{chapter_num}章同场",
-                        "impact": "low",
+        # Update timeline: storyTime.current from plan
+        timeline = self._read_json("timeline.json")
+        for event in timeline.get("events", []):
+            if event.get("chapter") == chapter_num:
+                event["event"] = title or event.get("event", "")
+                event["participants"] = updated_chars
+                # Try to extract time from chapter plan
+                time_info = chapter_plan.get("time", chapter_plan.get("story_time", ""))
+                if time_info:
+                    event["date"] = str(time_info)
+                    timeline["storyTime"]["current"] = str(time_info)
+                event["duration"] = chapter_plan.get("duration", "")
+        timeline["lastUpdated"] = now
+        self._write_json("timeline.json", timeline)
+
+        # Update location tracking if plan has location info
+        loc_data = self._read_json("locations.json")
+        location_info = chapter_plan.get("location", "")
+        if location_info and loc_data.get("locations"):
+            for loc in loc_data["locations"]:
+                if loc.get("name") and loc["name"] in str(location_info):
+                    loc.setdefault("events", []).append({
+                        "chapter": chapter_num,
+                        "event": title,
+                        "characters": updated_chars[:5],
                     })
-                    # Add to dynamicRelations for both directions
-                    for na, nb in [(name_a, name_b), (name_b, name_a)]:
-                        if na in relationships.get("characters", {}):
-                            dynamics = relationships["characters"][na].setdefault("dynamicRelations", [])
-                            existing = [d for d in dynamics if d.get("character") == nb]
-                            if not existing:
-                                dynamics.append({
-                                    "character": nb,
-                                    "initial": "陌生人",
-                                    "current": "同场",
-                                    "trajectory": "neutral",
-                                    "keyEvents": [f"第{chapter_num}章首次同场"],
-                                })
-            if changes:
-                relationships.setdefault("history", []).append({
-                    "chapter": chapter_num,
-                    "changes": changes,
-                })
-        relationships["lastUpdated"] = now
-        self._write_json("relationships.json", relationships)
+            loc_data["lastUpdated"] = now
+            self._write_json("locations.json", loc_data)
+
+        # Update protagonist state from chapter plan
+        char_state = self._read_json("character_state.json")
+        protag = char_state.get("protagonist", {})
+        if protag.get("name"):
+            # Update location from plan
+            if location_info:
+                protag["currentStatus"]["location"] = str(location_info)
+            # Extract new skills/knowledge from plan
+            for point in chapter_plan.get("plot_points", []):
+                pt = str(point)
+                if "学会" in pt or "获得" in pt or "领悟" in pt or "掌握" in pt:
+                    protag["currentStatus"].setdefault("skills", []).append(pt[:50])
+                if "发现" in pt or "得知" in pt or "知道" in pt or "意识到" in pt:
+                    protag["currentStatus"].setdefault("knowledge", []).append(pt[:50])
+            # Record consistency warning for suspicious patterns
+            if "性格" in chapter_text or "人设" in chapter_text:
+                char_state.setdefault("consistency", {}).setdefault("warnings", []).append(
+                    f"第{chapter_num}章：出现显式性格描述，建议检查是否符合已建立的性格设定"
+                )
+        char_state["lastUpdated"] = now
+        self._write_json("character_state.json", char_state)
 
         logger.info(f"Tracking updated for chapter {chapter_num}")
         return report
@@ -593,6 +682,29 @@ class Tracker:
             logger.info(f"Forgotten elements detected: {forgotten}")
         return forgotten if has_issues else {}
 
+    # --- Consistency score calculation ---
+
+    def calculate_consistency_score(self, review: dict) -> int:
+        """Calculate consistency score from review issues.
+        Formula: start at 100, note=-2, warning=-5, major=-15, min=0.
+        """
+        score = 100
+        for issue in review.get("issues", []):
+            severity = issue.get("severity", "")
+            if severity == "note":
+                score -= 2
+            elif severity == "warning":
+                score -= 5
+            elif severity == "major":
+                score -= 15
+        # Also count consistency_checks issues
+        consistency = review.get("consistency_checks", {})
+        for _key, issues_list in consistency.items():
+            if isinstance(issues_list, list):
+                for _ in issues_list:
+                    score -= 1  # Each consistency issue costs 1 point
+        return max(0, score)
+
     # --- Auto-fix: automatic repair of simple issues ---
 
     # Core replacements for common AI clichés
@@ -618,6 +730,37 @@ class Tracker:
         "面面相觑": "你看看我我看看你", "目瞪口呆": "愣住了",
         "心照不宣": "谁都没说但都懂",
         "一言难尽": "说来话长",
+        # audit-config connector_phrases
+        "首先": "", "其次": "", "再次": "", "在某种程度上": "",
+        "在当下": "", "随着": "",
+    }
+
+    # Empty phrases from audit-config.json
+    _EMPTY_PHRASES = [
+        "广泛关注", "引发热议", "影响深远", "有效提升",
+        "具有一定的指导意义", "值得我们思考",
+    ]
+
+    # Abstract nouns to flag for review
+    _ABSTRACT_NOUNS = [
+        "价值", "意义", "认知", "体系", "模式", "路径", "方法论", "趋势",
+    ]
+
+    # Sentence length rules from audit-config.json
+    _SENTENCE_RULES = {
+        "max_run_long": 4,
+        "max_run_short": 5,
+        "short_threshold": 12,
+        "long_threshold": 35,
+    }
+
+    # Cliché pairs: [cliché → suggested concrete alternative]
+    _CLICHE_PAIRS = {
+        "世界上没有轻松的成功": "说具体一次咬牙挺过去的时刻",
+        "坚持就是胜利": "写出坚持里最难熬的那个动作和气味",
+        "吃得苦中苦方为人上人": "写出那个苦到底是什么味道",
+        "失败是成功之母": "写出失败那一刻具体失去了什么",
+        "时间会证明一切": "写出等了多久，等来了什么",
     }
 
     def auto_fix_banned_words(self, text: str, style_guide: dict) -> tuple[str, list[str]]:
@@ -642,7 +785,61 @@ class Tracker:
                 fixed = fixed.replace(word, "")
                 changes.append(f"'{word}' → (删除)")
 
+        # Apply empty phrases cleanup
+        for phrase in self._EMPTY_PHRASES:
+            if phrase in fixed:
+                fixed = fixed.replace(phrase, "")
+                changes.append(f"'{phrase}' → (删除空洞短语)")
+
         return fixed, changes
+
+    def check_cliches(self, text: str) -> list[str]:
+        """Detect cliché phrases and return replacement suggestions."""
+        found = []
+        for cliche, replacement in self._CLICHE_PAIRS.items():
+            if cliche in text:
+                found.append(f"陈词滥调「{cliche}」→ 建议替换为「{replacement}」")
+        return found
+
+    def check_sentence_patterns(self, text: str) -> list[str]:
+        """Check for consecutive long/short sentences exceeding thresholds."""
+        issues = []
+        rules = self._SENTENCE_RULES
+        # Split text into sentences (Chinese-aware: split on 。！？)
+        import re
+        sentences = [s.strip() for s in re.split(r'[。！？]', text) if s.strip()]
+        if len(sentences) < 3:
+            return issues
+
+        run_long = 0
+        run_short = 0
+        for s in sentences:
+            char_count = len(s)
+            if char_count > rules["long_threshold"]:
+                run_long += 1
+                run_short = 0
+            elif char_count < rules["short_threshold"]:
+                run_short += 1
+                run_long = 0
+            else:
+                run_long = 0
+                run_short = 0
+
+            if run_long > rules["max_run_long"]:
+                issues.append(f"连续{run_long}句长句（>{rules['long_threshold']}字），建议插入短句调节节奏")
+                run_long = 0
+            if run_short > rules["max_run_short"]:
+                issues.append(f"连续{run_short}句极短句（<{rules['short_threshold']}字），建议适当合并")
+                run_short = 0
+        return issues
+
+    def check_abstract_nouns(self, text: str) -> list[str]:
+        """Detect abstract nouns that should be replaced with concrete expressions."""
+        found = []
+        for noun in self._ABSTRACT_NOUNS:
+            if noun in text:
+                found.append(f"抽象名词「{noun}」→ 建议替换为具体描述")
+        return found
 
     def auto_fix(self, chapter_text: str, chapter_num: int) -> dict:
         rules = self._read_json("validation_rules.json")
@@ -795,5 +992,16 @@ class Tracker:
         }
         if strictness in strictness_desc:
             parts.append(f"## 审核严格度\n{strictness_desc[strictness]}")
+
+        # Locations
+        if "locations" not in disabled:
+            loc_data = self._read_json("locations.json")
+            locs = loc_data.get("locations", [])
+            if locs:
+                lines = ["## 场景地点"]
+                for loc in locs[:8]:
+                    atm = f"，氛围：{loc['atmosphere']}" if loc.get("atmosphere") else ""
+                    lines.append(f"- {loc['name']}（{loc.get('type', '?')}）：{loc.get('function', '')}{atm}")
+                parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

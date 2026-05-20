@@ -304,6 +304,23 @@ class NovelPipeline:
             content = fs.get('content', '')
             print(f"    ⚠️ 伏笔「{content[:30]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
 
+    def _build_forgotten_context(self, forgotten: dict) -> str:
+        """Build context string from forgotten elements for writer awareness."""
+        parts = ["## 遗忘元素提醒（写作时必须关注）"]
+        if forgotten.get("characters"):
+            parts.append("### 失踪角色（优先处理）")
+            for char in forgotten["characters"]:
+                parts.append(f"- {char['name']}（{char['role']}）已{char['chapters_absent']}章未出场，上次出现第{char['last_seen']}章，需要在本章提及或安排出场")
+        if forgotten.get("plotlines"):
+            parts.append("### 停滞支线（需要推进）")
+            for plotline in forgotten["plotlines"]:
+                parts.append(f"- 「{plotline['name']}」当前状态：{plotline.get('status', '?')}，需要在本章推进")
+        if forgotten.get("foreshadowing"):
+            parts.append("### 未回收伏笔（考虑回收或提醒）")
+            for fs in forgotten["foreshadowing"]:
+                parts.append(f"- [{fs.get('id', '')}] {fs.get('content', '')[:50]}，埋设于第{fs['planted_chapter']}章，已{fs['chapters_since']}章未回收")
+        return "\n".join(parts)
+
     def _pre_write_check(self, state: NovelState, tracker: Tracker) -> None:
         checks = {
             "style_guide": state.style_guide is not None,
@@ -323,6 +340,31 @@ class NovelPipeline:
         if checks["validation_rules"]:
             strictness = tracker._get_strictness()
             print(f"  [写前检查] 验证模式：{strictness}")
+
+        # Extract key principle summaries for writer context
+        if checks["style_guide"] and state.style_guide:
+            style_name = state.style_guide.get("style_name", "")
+            tone = state.style_guide.get("tone", {}).get("overall", "")
+            if style_name:
+                print(f"  [写前检查] 风格：{style_name}")
+            reqs = state.style_guide.get("requirements", {}).get("detected", [])
+            if reqs:
+                print(f"  [写前检查] 写作规范：{', '.join(reqs)}")
+            dealbreakers = state.style_guide.get("review", {}).get("dealbreakers", [])
+            if dealbreakers:
+                print(f"  [写前检查] 红线：{', '.join(str(d) for d in dealbreakers[:3])}")
+            style_rules = state.style_guide.get("style_presets", {}).get("style_rules", [])
+            if style_rules:
+                print(f"  [写前检查] 文风要点：{'; '.join(str(r) for r in style_rules[:3])}")
+
+        # Extract key character states
+        char_state = tracker._read_json("character_state.json")
+        if char_state:
+            protag = char_state.get("protagonist", {})
+            if protag.get("name"):
+                phase = protag.get("development", {}).get("currentPhase", "")
+                loc = protag.get("currentStatus", {}).get("location", "")
+                print(f"  [写前检查] 主角{protag['name']}：阶段={phase}，位置={loc or '未知'}")
 
     def _write_chapters(self, state: NovelState) -> None:
         max_retries = self.config["novel"]["review_max_retries"]
@@ -349,6 +391,10 @@ class NovelPipeline:
             forgotten = tracker.check_forgotten(ch_num)
             if forgotten:
                 self._report_forgotten(forgotten)
+                # Inject forgotten elements into tracking context for writer awareness
+                forgotten_ctx = self._build_forgotten_context(forgotten)
+                if forgotten_ctx:
+                    tracking_ctx = f"{tracking_ctx}\n\n{forgotten_ctx}" if tracking_ctx else forgotten_ctx
 
             # Build running context
             completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
@@ -381,6 +427,19 @@ class NovelPipeline:
                 draft = fixed_draft
                 fixed = True
                 print(f"  [禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
+
+            # Programmatic checks: cliché/sentence/abstract patterns (report only)
+            cliche_issues = tracker.check_cliches(draft)
+            if cliche_issues:
+                print(f"  [陈词滥调] 发现 {len(cliche_issues)} 处：{cliche_issues[:3]}")
+
+            sentence_issues = tracker.check_sentence_patterns(draft)
+            if sentence_issues:
+                print(f"  [句式检查] {sentence_issues[:3]}")
+
+            abstract_issues = tracker.check_abstract_nouns(draft)
+            if abstract_issues:
+                print(f"  [抽象名词] 发现 {len(abstract_issues)} 处：{abstract_issues[:5]}")
 
             if fixed:
                 draft_path.write_text(draft, encoding="utf-8")
@@ -420,7 +479,10 @@ class NovelPipeline:
 
             if review.get("approved", False):
                 ch.review_status = "passed"
-                print(f"  [审核] 通过！质量评分：{review.get('overall_quality', '?')}/10，一致性：{review.get('consistency_score', '?')}%")
+                # Calculate and override consistency score using tracker formula
+                calc_score = tracker.calculate_consistency_score(review)
+                review["consistency_score"] = calc_score
+                print(f"  [审核] 通过！质量评分：{review.get('overall_quality', '?')}/10，一致性：{calc_score}%")
                 consistency = review.get("consistency_checks", {})
                 if consistency:
                     for key in ("character_issues", "world_issues", "timeline_issues",
