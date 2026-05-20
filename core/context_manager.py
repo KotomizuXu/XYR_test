@@ -109,6 +109,11 @@ class ContextManager:
         fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 500
         budget = MAX_CONTEXT_CHARS - fixed_len
 
+        # Track how many were originally included before truncation
+        tier2_count = min(max(0, total - 3), 7)  # max 7 condensed
+        tier1_count = min(3, total)
+        originally_included = tier1_count + tier2_count
+
         kept_lines = []
 
         # Tier 2: chapters 4-10 from end — one-sentence condensed (drop first)
@@ -118,7 +123,7 @@ class ContextManager:
             short = s[:60] + "…" if len(s) > 60 else s
             kept_lines.append(f"第{idx}章（简）：{short}")
 
-        # Tier 1: last 3 chapters — full summary (drop last, i.e. keep longest)
+        # Tier 1: last 3 chapters — full summary
         tier1 = summaries[-3:] if total >= 3 else summaries
         tier1_start = total - len(tier1) + 1
         for idx, s in enumerate(tier1, tier1_start):
@@ -128,7 +133,8 @@ class ContextManager:
         while kept_lines and sum(len(l) for l in kept_lines) + fixed_len > MAX_CONTEXT_CHARS:
             kept_lines.pop(0)
 
-        dropped = total - len([l for l in kept_lines if "（简）" not in l and "摘要" in l]) - len([l for l in kept_lines if "（简）" in l])
+        kept_count = len(kept_lines)
+        dropped = originally_included - kept_count
         if dropped > 0:
             kept_lines.insert(0, f"（前{dropped}章摘要已省略）")
 

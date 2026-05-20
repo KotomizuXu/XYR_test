@@ -274,3 +274,18 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #13 | 中等 | `llm_client.py` 的 `chat()` 末尾 `return text` 是死代码且 `text` 变量可能未绑定 | llm_client.py `chat`（改为 `raise RuntimeError`） |
 | #14 | 中等 | `reviewer.py` 世界观数据截断到 2000 字时可能截断在 JSON 结构中间 | agents/reviewer.py（截断后追加提示文字） |
 | #15 | 轻微 | `tracker.py` 中 `import re` 放在函数体内两处，应移至文件顶部 | tracker.py（统一移至顶部 import 区域） |
+
+以下问题在 2026-05-20 第二轮全量审查中发现并修复：
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #16 | 严重 | `_execute_revise` 不传 `review` 给 `update_tracking`，修订后追踪数据不消费 reviewer 输出 | pipeline.py `_execute_revise`（添加 `review=review` + `update_from_review`） |
+| #17 | 严重 | `_execute_revise` 不执行 `auto_fix` 和 `auto_fix_banned_words`，修订章节缺少程序化修复 | pipeline.py `_execute_revise`（添加完整修复流程） |
+| #18 | 严重 | 伏笔退休用 ID 但遗忘检测用 content 匹配，导致退休操作无效 | tracker.py `check_forgotten`（改为同时检查 ID 和 content） |
+| #19 | 中等 | `_execute_revise` 不更新 `ch.review_status` 和 `ch.review_notes`，修订后审核状态陈旧 | pipeline.py `_execute_revise`（添加状态更新） |
+| #20 | 中等 | `_execute_revise` 不执行质量检查（陈词滥调、句式、抽象名词） | pipeline.py `_execute_revise`（添加检查调用） |
+| #21 | 中等 | `update_tracking` 缺少同场角色双向 dynamicRelations 记录，仅依赖 reviewer L2 输出 | tracker.py `update_tracking`（添加同场角色双向记录） |
+| #22 | 中等 | 主角 skills/knowledge 列表无去重，多章累积导致数据膨胀 | tracker.py `update_tracking`（添加 `not in` 去重） |
+| #23 | 中等 | `writer.py` `.format()` 如果 constitution.md 含花括号会崩溃 | agents/writer.py（改用手动替换避免 `.format()`） |
+| #24 | 轻微 | `_truncate_context` "省略N章"计数包含设计上本就排除的章节，数值偏大 | context_manager.py `_truncate_context`（改为仅统计被截断移除的数量） |
+| #25 | 轻微 | `get_tracking_context` 重复读取 `plot_tracker.json`，浪费 I/O | tracker.py `get_tracking_context`（复用已有变量） |

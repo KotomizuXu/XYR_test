@@ -22,13 +22,13 @@ class WriterAgent(BaseAgent):
             tone = style_guide.get("tone", {}).get("overall", tone)
             perspective = style_guide.get("worldbuilding", {}).get("exposition_style", perspective)
 
-        system = self.system_prompt.format(
-            words_min=words_min,
-            words_max=words_max,
-            tone_guidance=tone,
-            narrative_perspective=perspective,
-        )
-        return self.apply_style(system, style_guide)
+        safe_prompt = self.system_prompt.replace("{", "{{").replace("}", "}}")
+        safe_prompt = safe_prompt.replace("{{words_min}}", str(words_min))
+        safe_prompt = safe_prompt.replace("{{words_max}}", str(words_max))
+        safe_prompt = safe_prompt.replace("{{tone_guidance}}", tone)
+        safe_prompt = safe_prompt.replace("{{narrative_perspective}}", perspective)
+
+        return self.apply_style(safe_prompt, style_guide)
 
     def _resolve_words(self, words_min: int | None, words_max: int | None) -> tuple[int, int]:
         cfg = self.config["novel"]["words_per_chapter"]

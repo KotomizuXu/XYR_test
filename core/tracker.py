@@ -835,6 +835,25 @@ class Tracker:
         self._write_json("character_state.json", char_state)
         report["characters_updated"] = updated_chars
 
+        # Build bidirectional dynamicRelations for co-occurring characters
+        if len(updated_chars) >= 2:
+            relationships = self._read_json("relationships.json")
+            pair_key = " 与 ".join(sorted(updated_chars[:6]))
+            existing_dynamic = relationships.get("dynamicRelations", [])
+            already_logged = any(
+                d.get("chapter") == chapter_num and " 与 ".join(sorted(d.get("characters", []))) == pair_key
+                for d in existing_dynamic
+            )
+            if not already_logged:
+                existing_dynamic.append({
+                    "characters": sorted(updated_chars[:6]),
+                    "change": f"同场出现（第{chapter_num}章）",
+                    "chapter": chapter_num,
+                })
+                relationships["dynamicRelations"] = existing_dynamic
+                relationships["lastUpdated"] = now
+                self._write_json("relationships.json", relationships)
+
         # --- L1.3: chapter_plan string matching updates ---
 
         # Update plot_tracker
@@ -916,10 +935,15 @@ class Tracker:
                 protag["currentStatus"]["location"] = str(location_info)
             for point in chapter_plan.get("plot_points", []):
                 pt = str(point)
+                truncated = pt[:50]
                 if "学会" in pt or "获得" in pt or "领悟" in pt or "掌握" in pt:
-                    protag["currentStatus"].setdefault("skills", []).append(pt[:50])
+                    skills = protag["currentStatus"].setdefault("skills", [])
+                    if truncated not in skills:
+                        skills.append(truncated)
                 if "发现" in pt or "得知" in pt or "知道" in pt or "意识到" in pt:
-                    protag["currentStatus"].setdefault("knowledge", []).append(pt[:50])
+                    knowledge = protag["currentStatus"].setdefault("knowledge", [])
+                    if truncated not in knowledge:
+                        knowledge.append(truncated)
             if "性格" in chapter_text or "人设" in chapter_text:
                 char_state.setdefault("consistency", {}).setdefault("warnings", []).append(
                     f"第{chapter_num}章：出现显式性格描述，建议检查是否符合已建立的性格设定"
@@ -1067,7 +1091,9 @@ class Tracker:
 
         # Stale foreshadowing
         for fs in plot_tracker.get("foreshadowing", []):
-            if self._is_retired("foreshadowing", fs.get("content", "")):
+            fs_id = fs.get("id", "")
+            fs_content = fs.get("content", "")
+            if self._is_retired("foreshadowing", fs_id) or self._is_retired("foreshadowing", fs_content):
                 continue
             planted = fs.get("planted", {})
             planted_ch = planted.get("chapter") if isinstance(planted, dict) else planted
@@ -1735,9 +1761,8 @@ class Tracker:
                     lines.append(f"- {loc['name']}（{loc.get('type', '?')}）：{loc.get('function', '')}{atm}")
                 parts.append("\n".join(lines))
 
-            # L2.3: Five senses for current location
-            plot_tracker_current = self._read_json("plot_tracker.json")
-            current_loc = plot_tracker_current.get("currentState", {}).get("location", "")
+            # L2.3: Five senses for current location (reuse plot_tracker read earlier)
+            current_loc = plot_tracker.get("currentState", {}).get("location", "")
             if current_loc:
                 for loc in locs:
                     if loc.get("name") and loc["name"] in current_loc:

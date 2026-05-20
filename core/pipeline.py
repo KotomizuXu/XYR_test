@@ -850,6 +850,32 @@ class NovelPipeline:
             print("  已放弃修订，保留原版本")
             return
 
+        # Programmatic fixes on revised text
+        fixed = False
+        fix_result = tracker.auto_fix(final_text, ch_num)
+        if fix_result["fixes"]["applied"]:
+            final_text = fix_result["text"]
+            fixed = True
+            print(f"  [追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
+
+        fixed_draft, banned_changes = tracker.auto_fix_banned_words(final_text, state.style_guide)
+        if banned_changes:
+            final_text = fixed_draft
+            fixed = True
+            print(f"  [禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
+
+        cliche_issues = tracker.check_cliches(final_text)
+        if cliche_issues:
+            print(f"  [陈词滥调] 发现 {len(cliche_issues)} 处：{cliche_issues[:3]}")
+
+        sentence_issues = tracker.check_sentence_patterns(final_text)
+        if sentence_issues:
+            print(f"  [句式检查] {sentence_issues[:3]}")
+
+        abstract_issues = tracker.check_abstract_nouns(final_text)
+        if abstract_issues:
+            print(f"  [抽象名词] 发现 {len(abstract_issues)} 处：{abstract_issues[:5]}")
+
         # Save revised draft
         dirs = self.state_mgr.ensure_dirs(state.novel_name)
         new_revision = ch.revision_count + 1
@@ -863,10 +889,19 @@ class NovelPipeline:
         edited_path.write_text(final_text, encoding="utf-8")
         ch.edited_path = str(edited_path)
 
+        # Update review status
+        if review.get("approved", False):
+            ch.review_status = "passed"
+        else:
+            ch.review_status = "needs_revision"
+        ch.review_notes = json.dumps(review, ensure_ascii=False)
+
         # Update summary and tracking
         ch.summary = self.ctx_mgr.generate_chapter_summary(final_text, ch_num)
         before = tracker.snapshot()
-        tracker.update_tracking(ch_num, final_text, chapter_plan)
+        tracker.update_tracking(ch_num, final_text, chapter_plan, review=review)
+        if review.get("tracking_updates"):
+            tracker.update_from_review(ch_num, review)
         after = tracker.snapshot()
         tracker.log_changes_csv(ch_num, before, after, source="revise")
 
