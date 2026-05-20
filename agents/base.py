@@ -21,6 +21,7 @@ STYLE_FIELDS = {
 
 _AGENT_CONFIG_KEYS = {
     "styleadvisor": "style_advisor",
+    "plotagent": "plotter",
 }
 
 class BaseAgent(ABC):

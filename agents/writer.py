@@ -66,8 +66,9 @@ class WriterAgent(BaseAgent):
         words_min, words_max = self._resolve_words(words_min, words_max)
         system = self._build_system_prompt(words_min, words_max, style_guide)
 
+        # 重写时不重复传入完整 running_context，只传审稿意见和草稿
+        # running_context 已在 system prompt 中通过风格指南体现，避免 token 叠加
         user_msg = (
-            f"{running_context}\n\n"
             f"## 审稿意见\n{review_feedback}\n\n"
             f"## 原始草稿\n{draft}\n\n"
             f"请根据审稿意见修改上述草稿，修复指出的所有问题。保持原有的好内容，只修改有问题的部分。"

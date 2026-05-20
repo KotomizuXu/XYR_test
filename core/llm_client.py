@@ -158,42 +158,52 @@ class LLMClient:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        max_retries: int = 3,
     ) -> dict | list:
-        """Chat expecting JSON response. Auto-continues on truncation."""
+        """Chat expecting JSON response. Auto-continues on truncation, retries on API errors."""
         temp = temperature if temperature is not None else self.default_temperature
         tokens = max_tokens if max_tokens is not None else self.default_max_tokens
 
-        response = self._call_api(
-            system_prompt, [{"role": "user", "content": user_message}],
-            temp, tokens, "思考中",
-        )
-        text = response.content[0].text
+        for attempt in range(max_retries):
+            try:
+                response = self._call_api(
+                    system_prompt, [{"role": "user", "content": user_message}],
+                    temp, tokens, "思考中",
+                )
+                text = response.content[0].text
 
-        # Auto-continue truncated JSON
-        if response.stop_reason == "max_tokens":
-            logger.warning(f"JSON response truncated at {len(text)} chars, requesting continuation...")
-            text = self._continue_json(system_prompt, user_message, text, temp, tokens)
+                if response.stop_reason == "max_tokens":
+                    logger.warning(f"JSON response truncated at {len(text)} chars, requesting continuation...")
+                    text = self._continue_json(system_prompt, user_message, text, temp, tokens)
 
-        return parse_json(text)
+                return parse_json(text)
+            except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"API error (attempt {attempt+1}), retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    raise
+            except anthropic.APIStatusError as e:
+                if e.status_code >= 500 and attempt < max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"Server error {e.status_code}, retrying in {wait}s")
+                    time.sleep(wait)
+                else:
+                    raise
 
     def _continue_json(self, system_prompt: str, user_message: str, existing_text: str, temperature: float, max_tokens: int, max_continuations: int = 3) -> str:
-        """Continue a truncated JSON response."""
-        messages = [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": existing_text},
-            {"role": "user", "content": "请继续输出，不要重复已输出的内容，直接从上文结尾处继续："},
-        ]
-        text = existing_text
+        """Continue a truncated JSON response by asking for a complete retry."""
+        # JSON续写拼接会产生无效JSON，改为要求重新输出完整JSON
+        retry_msg = f"{user_message}\n\n（注意：请输出完整的JSON，不要截断）"
+        messages = [{"role": "user", "content": retry_msg}]
         for _ in range(max_continuations):
-            response = self._call_api(system_prompt, messages, temperature, max_tokens, "续写中")
-            continuation = response.content[0].text
-            text += continuation
+            response = self._call_api(system_prompt, messages, temperature, max_tokens, "重新生成中")
+            text = response.content[0].text
             if response.stop_reason != "max_tokens":
-                break
-            logger.warning("Continuation still truncated, requesting more...")
-            messages.append({"role": "assistant", "content": continuation})
-            messages.append({"role": "user", "content": "继续："})
-        return text
+                return text
+            logger.warning("JSON response still truncated after retry")
+        return existing_text
 
     def _continue_text(self, system_prompt: str, user_message: str, existing_text: str, temperature: float, max_tokens: int, max_continuations: int = 3) -> str:
         """Continue a truncated text response."""
@@ -222,9 +232,14 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Multi-turn conversation."""
+        """Multi-turn conversation. Auto-continues on truncation."""
         temp = temperature if temperature is not None else self.default_temperature
         tokens = max_tokens if max_tokens is not None else self.default_max_tokens
 
         response = self._call_api(system_prompt, messages, temp, tokens, "思考中")
-        return response.content[0].text
+        text = response.content[0].text
+        if response.stop_reason == "max_tokens":
+            # Extract the last user message to use as context for continuation
+            last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            text = self._continue_text(system_prompt, last_user, text, temp, tokens)
+        return text

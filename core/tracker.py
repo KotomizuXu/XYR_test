@@ -92,8 +92,11 @@ class Tracker:
         if isinstance(characters, dict):
             characters = list(characters.values()) if characters else []
         characters = [c for c in characters if isinstance(c, dict)]
+        # Fallback: treat first character as protagonist if none have role field
         protagonists = [c for c in characters if c.get("role", "") in ("主角", "主人公")]
-        supporting = [c for c in characters if c.get("role", "") not in ("主角", "主人公")]
+        if not protagonists and characters:
+            protagonists = [characters[0]]
+        supporting = [c for c in characters if c not in protagonists]
         return characters, protagonists, supporting
 
     def _init_character_state(self, world_data: dict) -> None:
@@ -619,23 +622,23 @@ class Tracker:
 
     def auto_fix_banned_words(self, text: str, style_guide: dict) -> tuple[str, list[str]]:
         """Auto-replace banned AI words with natural alternatives."""
-        banned = []
+        # Always apply built-in replacements; supplement with style_guide banned words
+        banned_from_style = []
         if style_guide and "requirements" in style_guide:
-            banned = style_guide["requirements"].get("anti_ai_banned_words", [])
-        if not banned:
-            return text, []
+            banned_from_style = style_guide["requirements"].get("anti_ai_banned_words", [])
 
         changes = []
         fixed = text
-        for word in banned:
-            if word not in fixed:
-                continue
-            replacement = self._BANNED_REPLACEMENTS.get(word)
-            if replacement is not None:
+
+        # Apply built-in replacements first
+        for word, replacement in self._BANNED_REPLACEMENTS.items():
+            if word in fixed:
                 fixed = fixed.replace(word, replacement)
                 changes.append(f"'{word}' → '{replacement}'" if replacement else f"'{word}' → (删除)")
-            else:
-                # Fallback: remove filler phrases, keep substantive words
+
+        # Apply style_guide extra banned words not already in built-in dict
+        for word in banned_from_style:
+            if word not in self._BANNED_REPLACEMENTS and word in fixed:
                 fixed = fixed.replace(word, "")
                 changes.append(f"'{word}' → (删除)")
 

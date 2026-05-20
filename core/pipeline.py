@@ -190,12 +190,13 @@ class NovelPipeline:
         if self._interrupted:
             return
 
-        # Phase 2.5: Initialize tracking system
-        if state.phase == "writing" and state.current_chapter == 0:
-            print("[追踪系统] 正在初始化追踪数据...")
+        # Phase 2.5: Initialize tracking system (always ensure tracking files exist)
+        if state.phase == "writing":
             tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name))
-            tracker.init_tracking(state.world_data, state.outline, state.chapter_plans)
-            print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络）\n")
+            if not tracker._read_json("character_state.json"):
+                print("[追踪系统] 正在初始化追踪数据...")
+                tracker.init_tracking(state.world_data, state.outline, state.chapter_plans)
+                print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络）\n")
 
         if self._interrupted:
             return
@@ -518,7 +519,7 @@ class NovelPipeline:
             combined_parts.append(f"第{ch_num}章 {ch.title}\n\n{text}\n\n")
 
         full_path = final_dir / f"{state.novel_name}_全文.txt"
-        full_path.write_text("\n".join(combined_parts), encoding="utf-8")
+        full_path.write_text("".join(combined_parts), encoding="utf-8")
         print(f"  全文已合并保存至：{full_path}")
 
     # ── Revise flow ──────────────────────────────────────────────
@@ -759,14 +760,14 @@ class NovelPipeline:
             prev_ch = state.chapters[i - 1]
             prev_path = Path(prev_ch.edited_path) if prev_ch.edited_path else (Path(prev_ch.draft_path) if prev_ch.draft_path else None)
             if prev_path and prev_path.exists():
-                prev_ending = prev_path.read_text(encoding="utf-8")
+                prev_ending = prev_path.read_text(encoding="utf-8")[-800:]
         if i < state.total_chapters - 1:
             next_ch = state.chapters[i + 1]
             next_path = Path(next_ch.edited_path) if next_ch.edited_path else (Path(next_ch.draft_path) if next_ch.draft_path else None)
             if not next_path or not next_path.exists():
                 next_path = dirs["drafts"] / f"chapter_{next_ch.chapter_number:02d}.txt"
             if next_path.exists():
-                next_opening = next_path.read_text(encoding="utf-8")
+                next_opening = next_path.read_text(encoding="utf-8")[:800]
         return prev_ending, next_opening
 
     def _find_chapter(self, state: NovelState, chapter_number: int):

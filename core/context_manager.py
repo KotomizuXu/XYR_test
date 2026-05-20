@@ -53,9 +53,14 @@ class ContextManager:
         self.max_summary_length = config["novel"]["summary_max_length"]
 
     def generate_chapter_summary(self, chapter_text: str, chapter_number: int) -> str:
+        # 取首尾各3000字，保留章节开头和结尾的关键信息
+        if len(chapter_text) > 6000:
+            excerpt = chapter_text[:3000] + "\n…（中间省略）…\n" + chapter_text[-3000:]
+        else:
+            excerpt = chapter_text
         prompt = SUMMARY_PROMPT.format(
             max_length=self.max_summary_length,
-            chapter_text=chapter_text[:6000],
+            chapter_text=excerpt,
         )
         system = f"你是一个小说编辑助手，擅长提炼故事要点。正在为第{chapter_number}章生成摘要。"
         summary = self.llm.chat(system, prompt, temperature=0.3)
@@ -99,25 +104,36 @@ class ContextManager:
         return result
 
     def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict) -> str:
-        # Strategy: keep recent summaries only, drop oldest first
-        fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 200
+        # Tiered compression: keep last 3 full, compress 4-10, drop oldest
+        total = len(summaries)
+        fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 500
         budget = MAX_CONTEXT_CHARS - fixed_len
 
-        # Add summaries from newest to oldest until budget runs out
-        kept = []
-        for s in reversed(summaries):
-            line = f"第{len(summaries) - len(kept)}章摘要：{s}"
-            if budget - len(line) - len(kept) * 2 < 0:
-                break
-            kept.insert(0, line)
-            budget -= len(line) + 2
+        kept_lines = []
 
-        if len(kept) < len(summaries):
-            dropped = len(summaries) - len(kept)
-            kept.insert(0, f"（前{dropped}章摘要已省略，仅保留最近{len(kept)}章）")
+        # Tier 1: last 3 chapters — full summary
+        tier1 = summaries[-3:] if total >= 3 else summaries
+        tier1_start = total - len(tier1) + 1
+        for idx, s in enumerate(tier1, tier1_start):
+            kept_lines.append(f"第{idx}章摘要：{s}")
 
-        summaries_text = "\n\n".join(kept)
-        current_plan = self._format_chapter_plan(current_plan)
+        # Tier 2: chapters 4-10 from end — one-sentence condensed
+        tier2 = summaries[max(0, total - 10): max(0, total - 3)]
+        tier2_start = max(0, total - 10) + 1
+        for idx, s in enumerate(tier2, tier2_start):
+            short = s[:60] + "…" if len(s) > 60 else s
+            kept_lines.append(f"第{idx}章（简）：{short}")
+
+        # Check budget; if still over, drop tier2 entries from oldest
+        while kept_lines and sum(len(l) for l in kept_lines) + fixed_len > MAX_CONTEXT_CHARS:
+            kept_lines.pop(0)
+
+        dropped = total - len([l for l in kept_lines if "（简）" not in l and "摘要" in l]) - len([l for l in kept_lines if "（简）" in l])
+        if dropped > 0:
+            kept_lines.insert(0, f"（前{dropped}章摘要已省略）")
+
+        summaries_text = "\n\n".join(kept_lines)
+        current_plan_text = self._format_chapter_plan(current_plan)
 
         if tracking_context:
             return FULL_CONTEXT_TEMPLATE.format(
@@ -125,13 +141,13 @@ class ContextManager:
                 outline_ref=outline_ref,
                 summaries=summaries_text,
                 tracking_context=tracking_context,
-                current_plan=current_plan,
+                current_plan=current_plan_text,
             )
         return CONTEXT_TEMPLATE.format(
             world_ref=world_ref,
             outline_ref=outline_ref,
             summaries=summaries_text,
-            current_plan=current_plan,
+            current_plan=current_plan_text,
         )
 
     def _condense_world(self, world_data: dict | None) -> str:
