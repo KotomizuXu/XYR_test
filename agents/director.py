@@ -20,7 +20,7 @@ class DirectorAgent(BaseAgent):
         system = self.apply_style(self.system_prompt, style_guide)
         logger.info("Director: generating world and outline...")
         result = self.llm.chat_json(
-            system, user_msg, temperature=self._temperature(), max_tokens=16384
+            system, user_msg, temperature=self._temperature()
         )
         logger.info(f"Director: done. Characters: {len(result.get('characters', []))}")
         return result

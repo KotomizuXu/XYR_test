@@ -26,7 +26,7 @@ class ReviewerAgent(BaseAgent):
         system = self.apply_style(self.system_prompt, style_guide)
         logger.info(f"Reviewer: checking chapter {chapter_plan.get('chapter_number', '?')}...")
         result = self.llm.chat_json(
-            system, user_msg, temperature=self._temperature(), max_tokens=4096
+            system, user_msg, temperature=self._temperature()
         )
 
         approved = result.get("approved", False)

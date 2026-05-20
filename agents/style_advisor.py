@@ -17,7 +17,7 @@ class StyleAdvisorAgent(BaseAgent):
         user_msg += "请根据以上信息，生成完整的风格指南。注意 suggestions 中的参数建议要匹配故事的实际体量（如短篇、中篇、长篇）。"
         logger.info(f"StyleAdvisor: generating style guide for '{style_description[:50]}...'")
         result = self.llm.chat_json(
-            self.system_prompt, user_msg, temperature=0.5, max_tokens=4096
+            self.system_prompt, user_msg, temperature=0.5
         )
         logger.info(f"StyleAdvisor: done. Style name: {result.get('style_name', '?')}")
         return result

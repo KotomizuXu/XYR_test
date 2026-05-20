@@ -39,7 +39,6 @@ class CriticAgent(BaseAgent):
         result = self.llm.chat_json(
             system, user_msg,
             temperature=self._temperature(),
-            max_tokens=4096,
         )
 
         ideas = result.get("ideas", []) if isinstance(result, dict) else []
