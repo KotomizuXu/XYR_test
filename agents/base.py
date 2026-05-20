@@ -19,6 +19,10 @@ STYLE_FIELDS = {
 }
 
 
+_AGENT_CONFIG_KEYS = {
+    "styleadvisor": "style_advisor",
+}
+
 class BaseAgent(ABC):
     PROMPT_TEMPLATE: str
 
@@ -32,9 +36,12 @@ class BaseAgent(ABC):
         path = PROMPTS_DIR / self.PROMPT_TEMPLATE
         return path.read_text(encoding="utf-8")
 
+    def _agent_name(self) -> str:
+        raw = self.__class__.__name__.replace("Agent", "").lower()
+        return _AGENT_CONFIG_KEYS.get(raw, raw)
+
     def _agent_config(self) -> dict:
-        name = self.__class__.__name__.replace("Agent", "").lower()
-        return self.config.get("agents", {}).get(name, {})
+        return self.config.get("agents", {}).get(self._agent_name(), {})
 
     def _temperature(self) -> float:
         if self._temperature_override is not None:
@@ -47,7 +54,7 @@ class BaseAgent(ABC):
     def apply_style(self, prompt: str, style_guide: dict | None) -> str:
         if not style_guide:
             return prompt
-        agent_name = self.__class__.__name__.replace("Agent", "").lower()
+        agent_name = self._agent_name()
         fields = STYLE_FIELDS.get(agent_name)
         if fields:
             filtered = {k: v for k, v in style_guide.items() if k in fields}

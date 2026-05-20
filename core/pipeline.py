@@ -397,6 +397,9 @@ class NovelPipeline:
             while not review.get("approved", False) and retries < max_retries:
                 retries += 1
                 issues = review.get("issues", [])
+                if not issues:
+                    logger.warning(f"Review not approved but no issues listed, accepting as-is")
+                    break
                 major = [i for i in issues if i.get("severity") == "major"]
                 print(f"  [审核] 发现 {len(major)} 个主要问题，第{retries}次重写...")
 
@@ -476,21 +479,7 @@ class NovelPipeline:
             tracking_ctx = tracker.get_tracking_context(ch_num)
 
             # Get adjacent chapters for transition context
-            prev_ending = ""
-            next_opening = ""
-            if i > 0:
-                prev_ch = state.chapters[i - 1]
-                if prev_ch.edited_path:
-                    prev_text = Path(prev_ch.edited_path).read_text(encoding="utf-8")
-                    prev_ending = prev_text
-                elif prev_ch.draft_path:
-                    prev_text = Path(prev_ch.draft_path).read_text(encoding="utf-8")
-                    prev_ending = prev_text
-            if i < state.total_chapters - 1:
-                next_ch = state.chapters[i + 1]
-                next_draft = dirs["drafts"] / f"chapter_{next_ch.chapter_number:02d}.txt"
-                if next_draft.exists():
-                    next_opening = next_draft.read_text(encoding="utf-8")
+            prev_ending, next_opening = self._get_adjacent_text(state, ch_num)
 
             edited = self.editor.run(draft, ch_num, prev_ending, next_opening, style_guide=state.style_guide, tracking_context=tracking_ctx)
 

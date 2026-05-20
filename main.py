@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -20,6 +21,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.pipeline import NovelPipeline
 from core.state_manager import StateManager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 def cmd_new(args):

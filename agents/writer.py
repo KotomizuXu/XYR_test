@@ -15,11 +15,7 @@ class WriterAgent(BaseAgent):
         super().__init__(llm, config)
         self.ctx_mgr = ctx_mgr
 
-    def run(self, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
-        cfg = self.config["novel"]["words_per_chapter"]
-        words_min = words_min or cfg["min"]
-        words_max = words_max or cfg["max"]
-
+    def _build_system_prompt(self, words_min: int, words_max: int, style_guide: dict | None = None) -> str:
         tone = "根据设定风格"
         perspective = "第三人称有限视角"
         if style_guide:
@@ -32,7 +28,15 @@ class WriterAgent(BaseAgent):
             tone_guidance=tone,
             narrative_perspective=perspective,
         )
-        system = self.apply_style(system, style_guide)
+        return self.apply_style(system, style_guide)
+
+    def _resolve_words(self, words_min: int | None, words_max: int | None) -> tuple[int, int]:
+        cfg = self.config["novel"]["words_per_chapter"]
+        return words_min or cfg["min"], words_max or cfg["max"]
+
+    def run(self, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
+        words_min, words_max = self._resolve_words(words_min, words_max)
+        system = self._build_system_prompt(words_min, words_max, style_guide)
 
         user_msg = f"{running_context}\n\n请根据以上上下文和剧情要点，撰写本章正文。"
         logger.info(f"Writer: drafting chapter {chapter_plan.get('chapter_number', '?')}...")
@@ -41,7 +45,7 @@ class WriterAgent(BaseAgent):
 
         # Check word count, request continuation if too short
         char_count = len(text)
-        if char_count < words_min * 0.8:
+        if char_count < words_min * 0.9:
             logger.info(f"Writer: text too short ({char_count} chars), requesting continuation...")
             continuation = self.llm.chat_with_history(
                 system,
@@ -59,23 +63,8 @@ class WriterAgent(BaseAgent):
         return text.strip()
 
     def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
-        cfg = self.config["novel"]["words_per_chapter"]
-        words_min = words_min or cfg["min"]
-        words_max = words_max or cfg["max"]
-
-        tone = "根据设定风格"
-        perspective = "第三人称有限视角"
-        if style_guide:
-            tone = style_guide.get("tone", {}).get("overall", tone)
-            perspective = style_guide.get("worldbuilding", {}).get("exposition_style", perspective)
-
-        system = self.system_prompt.format(
-            words_min=words_min,
-            words_max=words_max,
-            tone_guidance=tone,
-            narrative_perspective=perspective,
-        )
-        system = self.apply_style(system, style_guide)
+        words_min, words_max = self._resolve_words(words_min, words_max)
+        system = self._build_system_prompt(words_min, words_max, style_guide)
 
         user_msg = (
             f"{running_context}\n\n"

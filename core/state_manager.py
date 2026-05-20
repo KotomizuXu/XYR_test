@@ -84,6 +84,7 @@ class StateManager:
             "edited": base / "edited",
             "final": base / "final",
             "reviews": base / "review_reports",
+            "tracking": base / "tracking",
         }
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)

@@ -592,6 +592,31 @@ class Tracker:
 
     # --- Auto-fix: automatic repair of simple issues ---
 
+    # Core replacements for common AI clichés
+    _BANNED_REPLACEMENTS = {
+        "综上所述": "", "总而言之": "", "不仅如此": "而且", "值得一提的是": "",
+        "在当今社会": "", "随着科技的发展": "", "不可否认": "", "众所周知": "",
+        "毋庸置疑": "", "日新月异": "", "蓬勃发展": "", "息息相关": "",
+        "举足轻重": "重要", "循序渐进": "一步步", "深入探讨": "讨论",
+        "至关重要": "关键", "具有重要意义": "很重要",
+        "标志着": "意味着", "体现了": "显示了", "反映了": "说明",
+        "不仅...而且": "既...又",
+        "五味杂陈": "心里复杂", "百感交集": "心里乱糟糟的",
+        "心如刀绞": "心疼得要命", "肝肠寸断": "特别难过",
+        "悲喜交加": "又高兴又难过", "欣喜若狂": "高兴坏了",
+        "怒不可遏": "气死了", "忐忑不安": "心里没底",
+        "惴惴不安": "一直担心", "如释重负": "总算松了口气",
+        "心有余悸": "还有点怕", "不知所措": "不知道怎么办",
+        "措手不及": "没反应过来", "无地自容": "尴尬死了",
+        "极其": "很", "万分": "特别", "异常": "很",
+        "颇为": "挺", "甚为": "很", "尤为": "特别", "格外": "特别",
+        "然而": "但是", "殊不知": "", "岂料": "没想到",
+        "不料": "没想到", "谁知": "没想到",
+        "面面相觑": "你看看我我看看你", "目瞪口呆": "愣住了",
+        "心照不宣": "谁都没说但都懂",
+        "一言难尽": "说来话长",
+    }
+
     def auto_fix_banned_words(self, text: str, style_guide: dict) -> tuple[str, list[str]]:
         """Auto-replace banned AI words with natural alternatives."""
         banned = []
@@ -600,26 +625,19 @@ class Tracker:
         if not banned:
             return text, []
 
-        replacements = {
-            "综上所述": "", "总而言之": "", "不仅如此": "而且", "值得一提的是": "",
-            "在当今社会": "", "随着科技的发展": "", "不可否认": "", "众所周知": "",
-            "毋庸置疑": "", "日新月异": "", "蓬勃发展": "", "息息相关": "",
-            "举足轻重": "重要", "循序渐进": "一步步", "深入探讨": "讨论",
-            "至关重要": "关键", "具有重要意义": "很重要",
-            "标志着": "意味着", "体现了": "显示了", "反映了": "说明",
-            "不仅...而且": "既...又",
-        }
-
         changes = []
         fixed = text
         for word in banned:
-            if word in fixed:
-                replacement = replacements.get(word, "")
-                if replacement:
-                    fixed = fixed.replace(word, replacement)
-                    changes.append(f"'{word}' → '{replacement}'")
-                else:
-                    changes.append(f"'{word}' — 需要手动改写")
+            if word not in fixed:
+                continue
+            replacement = self._BANNED_REPLACEMENTS.get(word)
+            if replacement is not None:
+                fixed = fixed.replace(word, replacement)
+                changes.append(f"'{word}' → '{replacement}'" if replacement else f"'{word}' → (删除)")
+            else:
+                # Fallback: remove filler phrases, keep substantive words
+                fixed = fixed.replace(word, "")
+                changes.append(f"'{word}' → (删除)")
 
         return fixed, changes
 

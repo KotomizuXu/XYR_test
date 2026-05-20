@@ -20,8 +20,7 @@ class CriticAgent(BaseAgent):
         tracking_context: str = "",
         style_guide: dict | None = None,
     ) -> list[dict]:
-        system = self.system_prompt
-        system = self.apply_style(system, style_guide)
+        system = self.apply_style(self.system_prompt, style_guide)
 
         parts = [
             f"## 章节正文\n{chapter_text[:8000]}\n",

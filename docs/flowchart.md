@@ -204,6 +204,42 @@ flowchart TD
     NEXT --> |否| EDIT([进入编辑阶段])
 ```
 
+## 修订流程（revise 命令）
+
+```mermaid
+flowchart TD
+    START([用户选择章节+输入修改意见]) --> CRITIC
+
+    subgraph R1["Phase R1: 修订顾问 CriticAgent"]
+        CRITIC[分析修改意见<br/>结合世界观+追踪数据<br/>生成3-5个修改思路]
+    end
+
+    CRITIC --> SELECT{用户选择思路}
+    SELECT --> |选择思路| SELECTED[使用选中思路]
+    SELECT --> |自定义方向| CUSTOM[使用自定义修改方向]
+    SELECT --> |跳过| RAW[直接使用原始意见]
+
+    SELECTED --> REWRITE
+    CUSTOM --> REWRITE
+    RAW --> REWRITE
+
+    subgraph R2["Phase R2: 修订执行"]
+        REWRITE[WriterAgent.rewrite<br/>根据修改思路重写] --> REVIEW
+        REVIEW[ReviewerAgent.run<br/>三阶段校验]
+        REVIEW --> PASS{审核通过?}
+        PASS --> |有major问题| RETRY[WriterAgent.rewrite<br/>再次修订（仅1次）]
+        RETRY --> REVIEW2[ReviewerAgent.run]
+        REVIEW2 --> EDIT
+        PASS --> |通过| EDIT
+    end
+
+    EDIT[EditorAgent.run<br/>润色修订版本]
+    EDIT --> CONFIRM{用户确认?}
+    CONFIRM --> |y| SAVE[保存修订<br/>更新draft+edited+summary+tracking]
+    CONFIRM --> |n| CANCEL([放弃修订，保留原版])
+    SAVE --> DONE([修订完成])
+```
+
 ## 文件结构
 
 ```
