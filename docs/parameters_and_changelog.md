@@ -1,7 +1,7 @@
 # 参数参考表
 
 本文档是项目中所有可配置参数、硬编码常量、数据链路分层、CSV 字段映射及 bug 修复记录的**权威来源**。
-字段链路的消费细节请查阅 `docs/self_check.md`；验证协议请查阅 `docs/verify_protocol.md`；**接到需求的执行流程请先读 `docs/workflow.md`**。
+字段链路的消费细节请查阅 `docs/system_reference.md`；验证协议请查阅 `docs/verification_protocol.md`；**接到需求的执行流程请先读 `docs/execution_workflow.md`**。
 
 ## 来源图例
 
@@ -132,7 +132,7 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 题材关键词 | 严格度 |
 |-----------|--------|
 | 悬疑、推理、历史、严肃 | `strict` |
-| 爽文、复仇、言情、甜文、虐文、网文、玄幻、仙侠 | `flexible` |
+| 爽文、复仇、言情、甜文、虐文、网文、玄幻、仙侠、都市 | `flexible` |
 | 未匹配 | `strict`（默认） |
 
 ### 退休元素与禁用检查
@@ -576,7 +576,7 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|----------|
 | #43 | 严重 | `StateManager.load` 直接 `NovelState(**data)`，若 state.json 含未知字段会 TypeError | state_manager.py `load`（添加 `__dataclass_fields__` 白名单过滤） |
-| #44 | 文档 | docs/ 三份文档职责重叠，无 AI 可执行的验证协议 | 新建 `docs/verify_protocol.md`，重构 parameters.md / self_check.md / flowchart.md |
+| #44 | 文档 | docs/ 三份文档职责重叠，无 AI 可执行的验证协议 | 新建 `docs/verification_protocol.md`，重构 parameters.md / self_check.md / flowchart.md |
 | #45 | 文档 | `tracking_changes.csv` 字段中文映射仅在 `_FIELD_MEANINGS` 代码中，文档无记录 | parameters.md 第九章新增完整映射表 |
 
 ### 2026-05-21 闭环验证发现并修复
@@ -655,6 +655,23 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #91 I2 | 工程 | review-rewrite 循环硬上限（≤3 轮重写），到上限后接受当前版本，避免 reviewer 一直 reject 导致无限循环 | `config.yaml novel.review_max_retries: 3` + `core/pipeline.py` 上限日志说明 |
 | #92 J2 | 硬约束 | 每章必须至少出现 2 个张力波峰（中间有低谷缓冲） | `prompts/writer_system.txt` 章节硬约束段 + `prompts/editor_system.txt` 张力波峰核查段 |
 | #93 J4 | 硬约束 | 每章必须至少 1 处意外转折（预期反转 / 信息差 / 角色反常 / 节外生枝 / 隐藏动机） | `prompts/writer_system.txt` 章节硬约束段 |
+| #94 A3 | 数据链路 | reviewer `quality_breakdown` 八维评分字段无消费 → 在 pipeline._write_chapters 和 _execute_revise 中添加分维展示 | `core/pipeline.py` |
+| #95 B4 | 数据链路 | plotter 5 个字段（previous_link / opening_hook_type / ending_hook_type / characters_on_stage / scene_list）无消费 → 在 _format_chapter_plan 中添加格式化 | `core/context_manager.py` |
+| #96 F1 | 类型安全 | tracker.analyze_development 缺 isinstance 检查 → 补全 `isinstance(result, dict)` 防护 | `core/tracker.py` |
+| #97 I2 | 映射 | _FIELD_MEANINGS 缺 character_state.psychology 和 validation_rules.active_validation_level 中文映射 → 补全 | `core/tracker.py` |
+| #98 D3 | 映射 | _GENRE_STRICTNESS 未覆盖"都市"题材 → 添加 `"都市": "flexible"` | `core/pipeline.py` |
+| #99 J1 | 协议 | 验证协议 B3 表格未覆盖新增字段 + 缺 prompt schema 消费检查项 → 添加 J2 检查项 + 更新 B3/A3/F1 表格 | `docs/verification_protocol.md` |
+
+### 2026-05-22 Director 增量生成重构
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|---------|
+| #100 | 架构 | Director 精修阶段前面的修改后面的内容感知不到（_build_refine_context 剥离 characters/locations + 角色间只共享名字 + 世界观截断 800 字符）→ 重构为增量生成+逐个确认架构：Director 按层级生成（world→角色逐个→地点逐个→outline），每个 piece 生成时带完整已确认上下文，然后精修确认 | `agents/director.py`、`core/pipeline.py`、`prompts/director_world.txt`（新建）、`prompts/director_character.txt`（新建）、`prompts/director_location.txt`（新建）、`prompts/director_outline.txt`（新建） |
+| #101 | 数据链路 | 用户需求（如"不要升级流"）在 writing/editing 阶段丢失——story_idea 未注入 build_running_context + StyleAdvisor 无负面约束提取 + Editor 不接收 setting/review 字段 → 4 处修复：(1) build_running_context 新增 story_idea 参数（截断600字）；(2) Writer/Editor STYLE_FIELDS 扩展 setting 和 review；(3) pipeline 两处调用传入 story_idea；(4) style_advisor prompt 增加负面约束提取指令 | `core/context_manager.py`、`agents/base.py`、`core/pipeline.py`、`prompts/style_advisor_system.txt` |
+| #102 | 数据链路 | 用户负面约束在 Director 阶段仍可能被违反——StyleAdvisor 触发词"升级"匹配"不要升级流"反向触发 fast-paced + Director/Plotter 不接收 requirements 字段 + Director prompt 无负面约束指令 → 3 处修复：(1) style_advisor 增加否定约束检测规则（否定词+触发词=不触发正面标准，写入 quality_gates+taboos）；(2) Director/Plotter STYLE_FIELDS 增加 requirements；(3) 4 个 director prompt 增加负面约束遵守段落 | `prompts/style_advisor_system.txt`、`agents/base.py`、`prompts/director_world.txt`、`prompts/director_character.txt`、`prompts/director_location.txt`、`prompts/director_outline.txt` |
+| #103 | 数据链路 | braindump 立项问答中的负面约束可能被 LLM 软化为正面表述（如"不要升级流"→"追求自由"），导致 StyleAdvisor 否定检测无法匹配 → braindump 结束后增加 `_extract_negative_constraints` 一步 LLM 调用，显式提取所有负面约束追加到 style_description 末尾，确保 StyleAdvisor 一定能识别 | `main.py` |
+| #104 | 健壮性 | API 上下文窗口溢出（400 BadRequest）直接 raise 不被重试，且写作循环无 try/except → 异常时当前章节进度未保存，resume 后从第一章重新写 → 在 `_run_pipeline` 调用 `_write_chapters`/`_edit_chapters` 处加 try/except，捕获异常时保存当前 `state.current_chapter` 和 `state.phase` 后再 raise，确保 resume 能从断点章节继续 | `core/pipeline.py` |
+| #105 | 截断 | CLI 展示截断阈值过小（灵感 40-120 字、调整意见 60 字、修改思路 80 字等），20 万字规模下信息大量丢失 → 全面放宽：灵感预览 100/300 字、调整意见 120 字、修改思路描述 200 字、伏笔 60 字、写前检查 5 条、running context 总预算 60K→80K、各 JSON 截断 2K→3-4K | `core/ui.py`、`main.py`、`core/pipeline.py`、`core/context_manager.py` |
 
 跳过项（用户决策）：A0 自动检测题材 / B0 角色冲突矩阵 / C0 群戏调度 / I3 章节字数日志 / I4 写作日志格式 / J1 词汇丰富度自动检测 / J3 主题贯穿度自动检测。
 

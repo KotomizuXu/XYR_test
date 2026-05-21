@@ -1,9 +1,9 @@
 # AI 代码验证协议
 
 本文档是每次大批量代码变更后的**AI 执行型审查工具**。
-参考手册请见 `docs/self_check.md`（字段链路细节）和 `docs/parameters.md`（参数与常量）。
+参考手册请见 `docs/system_reference.md`（字段链路细节）和 `docs/parameters_and_changelog.md`（参数与常量）。
 
-> **接到需求时不要从这里开始读** —— 先读 `docs/workflow.md`（流程总纲），它会告诉你什么时候来跑本协议。
+> **接到需求时不要从这里开始读** —— 先读 `docs/execution_workflow.md`（流程总纲），它会告诉你什么时候来跑本协议。
 
 ---
 
@@ -11,10 +11,11 @@
 
 1. **必须先读完全部文件清单**，不能只看 diff 或部分文件
 2. **每项必须输出**：`✅ 通过 / ❌ 有问题 / ➖ 不适用`
-3. **每个"通过"必须给出依据**（文件路径:行号 或 函数名）
+3. **每个"通过"必须给出依据**（文件路径:行号 或 函数名），所有字段链路判断必须基于代码原文，不凭文档描述推断；文档与代码不符以代码为准
 4. **每个"有问题"必须说明**：断裂点在哪、影响什么、建议如何修复
 5. **不适用**：仅用于"该 Agent/功能尚未实现"的情况，不能因为"没改这部分"而跳过
 6. **验证完成后必须执行文档同步**（见本文件最后一章）
+7. **审计模式下禁止直接修改代码**——先输出完整验证报告（含所有发现+建议方向），等用户确认后再动手修复
 
 ---
 
@@ -43,8 +44,8 @@
 - `prompts/tracking_analysis.txt`（L3 分析 prompt）
 
 **文档**
-- `docs/self_check.md`（字段链路参考）
-- `docs/parameters.md`（参数与常量参考）
+- `docs/system_reference.md`（字段链路参考）
+- `docs/parameters_and_changelog.md`（参数与常量参考）
 
 ---
 
@@ -100,6 +101,7 @@
 | `overall_quality` | `pipeline._write_chapters` 打印展示 | |
 | `strengths[]` | `pipeline._write_chapters` + `_execute_revise` 注入 rewrite 反馈 | |
 | `tracking_updates` | `tracker.update_from_review` | |
+| `quality_breakdown` | `pipeline._write_chapters` + `_execute_revise` 分维展示 | |
 
 通过条件：以上所有字段均有明确消费代码，无字段只被 `.get()` 取出但结果未使用
 
@@ -205,9 +207,14 @@
 | `location` | ✅ | update_tracking currentState + locations |
 | `time` | ✅ | update_tracking timeline |
 | `duration` | ❌ 不在 _format_chapter_plan | _init_timeline events[].duration |
+| `previous_link` | ✅ `承上启下：{...}` | — |
+| `opening_hook_type` | ✅ `章首引子类型：{...}` | — |
+| `ending_hook_type` | ✅ `章尾悬念类型：{...}` | — |
+| `characters_on_stage` | ✅ `实际登场角色：{...}` | — |
+| `scene_list` | ✅ `场景列表：` 逐场景输出 | — |
 | `chapter_number` | ❌ 不在格式化文本 | pipeline 索引使用 |
 
-通过条件：所有字段至少有一个消费点；`duration` 和 `chapter_number` 的"不在格式化"已在 self_check.md 中标注为"有意不消费"
+通过条件：所有字段至少有一个消费点；`duration` 和 `chapter_number` 的"不在格式化"已在 system_reference.md 中标注为"有意不消费"
 
 ---
 
@@ -219,7 +226,7 @@
 ① 该字段对 Writer/Reviewer/Editor 有用？→ 补充到 _condense_world 或 _format_chapter_plan
 ② 属于 tracker 追踪范畴？→ 确认 tracker init/update/_consume_review 中有消费
 ③ 属于 pipeline 流程控制？→ 确认在 pipeline 的对应阶段有读取
-④ 以上均否 → 在 self_check.md 中标注"有意不消费"并说明理由，或从 prompt 中删除该字段
+④ 以上均否 → 在 system_reference.md 中标注"有意不消费"并说明理由，或从 prompt 中删除该字段
 ```
 
 通过条件：无字段处于"生成了但没有任何消费者且未标注"的状态
@@ -444,12 +451,12 @@
 
 | Agent/位置 | 预期类型 | 当前类型检查 |
 |-----------|---------|------------|
-| `StyleAdvisorAgent.run` | dict | |
-| `DirectorAgent.run` | dict | |
-| `PlotAgent.run` | list[dict] | |
-| `ReviewerAgent.run` | dict | |
-| `CriticAgent.run` | dict | |
-| `tracker.analyze_development` | dict | |
+| `StyleAdvisorAgent.run` | dict | `isinstance(result, dict)` |
+| `DirectorAgent.run` | dict | `isinstance(result, dict)` |
+| `PlotAgent.run` | list[dict] | `isinstance(result, list)` |
+| `ReviewerAgent.run` | dict | `isinstance(result, dict)` |
+| `CriticAgent.run` | dict | `isinstance(result, dict)` |
+| `tracker.analyze_development` | dict | `isinstance(result, dict)` |
 
 通过条件：每行均有 `isinstance` 检查，返回错误类型时 raise 或返回安全默认值，不会让 `.get()` 在 list 上崩溃
 
@@ -545,7 +552,7 @@
 | 每章最多字数 `words_max` | ≥ words_min | |
 | 遗忘阈值 | 格式错误时是否有安全 fallback | |
 
-通过条件：以上均有校验；或明确记录已知缺口（见 self_check.md 17.2）
+通过条件：以上均有校验；或明确记录已知缺口（见 system_reference.md 17.2）
 
 ---
 
@@ -594,6 +601,24 @@
 
 ---
 
+**J2. Prompt schema 字段消费覆盖**
+
+检查目标：每次新增 prompt schema 字段后，是否存在系统性的"生成 → 存储 → 格式化 → 消费"链路验证。
+
+检查方法：
+1. 对比本次变更中所有 `*_system.txt` 的 JSON schema 字段变动（新增/删除/修改）
+2. 对每个新增字段，按以下清单逐一验证：
+   - 存储：`pipeline.py` 或 `agents/*.py` 中是否有 `result.get("字段名")` 提取并存入 `state` / 返回值
+   - 格式化：`context_manager.py` 的 `_format_*` / `_condense_*` 方法中是否有该字段的提取和格式化
+   - 消费：下游 Agent（writer/reviewer/editor）或 tracker 是否实际使用该格式化后的数据
+3. 对每个删除字段，确认 pipeline 中不再硬编码引用
+
+通过条件：每个新增字段三环节（存储/格式化/消费）均有代码覆盖，或明确标注"有意不消费"并说明理由
+
+与 B4 的关系：B4 判定"死字段"的范围仅限于已有字段；J2 是增量检查，确保新增字段不会在下次验证前就已变成死字段
+
+---
+
 ## 三、验证报告输出格式
 
 每次执行后，按以下格式输出报告：
@@ -631,22 +656,22 @@
 
 | 触发条件 | 必须更新的文档 | 更新内容 |
 |---------|-------------|---------|
-| 发现新 bug 并修复 | `docs/parameters.md` 第九章 | 追加 bug 记录行（编号、严重度、问题描述、修复位置） |
+| 发现新 bug 并修复 | `docs/parameters_and_changelog.md` 第九章 | 追加 bug 记录行（编号、严重度、问题描述、修复位置） |
 | 发现新 bug 并修复 | `README.md` 变更日志 | 追加修复摘要（日期 + 简述） |
-| 新增或修改字段链路 | `docs/self_check.md` 对应章节 | 更新字段链路表，更新章节末"最后验证时间" |
-| 新增或修改字段链路 | `docs/parameters.md` 第六章 | 更新 L1/L2/L3 追踪字段表 |
-| 新增或修改 tracking 字段 | `docs/parameters.md` CSV 字段映射章节 | 更新字段路径与中文含义对照表 |
-| `_FIELD_MEANINGS` 有增删 | `docs/parameters.md` CSV 字段映射章节 | 同步更新 |
+| 新增或修改字段链路 | `docs/system_reference.md` 对应章节 | 更新字段链路表，更新章节末"最后验证时间" |
+| 新增或修改字段链路 | `docs/parameters_and_changelog.md` 第六章 | 更新 L1/L2/L3 追踪字段表 |
+| 新增或修改 tracking 字段 | `docs/parameters_and_changelog.md` CSV 字段映射章节 | 更新字段路径与中文含义对照表 |
+| `_FIELD_MEANINGS` 有增删 | `docs/parameters_and_changelog.md` CSV 字段映射章节 | 同步更新 |
 | 新增或修改主流程/数据流 | `docs/flowchart.md` | 更新对应 Mermaid 图 |
-| 新增或修改 config 参数 | `docs/parameters.md` 对应配置表 | 更新参数行 |
+| 新增或修改 config 参数 | `docs/parameters_and_changelog.md` 对应配置表 | 更新参数行 |
 | 新增 Agent 或 Phase | `README.md` 架构图 + 核心特性 | 同步更新 |
 | 新增或升级依赖 | `requirements.txt` + `README.md` 环境要求 | 同步更新 |
-| 发现验证协议覆盖盲区 | `docs/verify_protocol.md` | 补充或修正验证项（J1 触发） |
+| 发现验证协议覆盖盲区 | `docs/verification_protocol.md` | 补充或修正验证项（J1 触发） |
 | 以上均无 | 无需更新 | 在报告末尾注明"文档已是最新，无需同步" |
 
 > **注意**：即使本次变更很小，也必须检查上表所有行。漏检某行等于放弃了文档与代码的同步保证。
 
 ---
 
-*最后验证执行时间：2026-05-21（含 #46-#50 修复验证）*
-*协议版本：1.1*
+*最后验证执行时间：2026-05-22（含 #51-#56 修复验证）*
+*协议版本：1.2*

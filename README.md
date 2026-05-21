@@ -2,7 +2,7 @@
 
 基于多 Agent 协作的 AI 小说生成系统。7 个专职 Agent 模拟真实出版流程，从风格分析到最终润色，全自动完成小说创作。
 
-> **AI 协作者请先读 [`docs/workflow.md`](docs/workflow.md)** —— 它定义了接到需求时的执行流程（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）。本项目要求每次代码变更后**同步更新所有受影响文档**（parameters / self_check / flowchart / requirements / README），workflow.md 里有完整的同步矩阵。
+> **AI 协作者请先读 [`docs/execution_execution_workflow.md`](docs/execution_execution_workflow.md)** —— 它定义了接到需求时的执行流程（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）。本项目要求每次代码变更后**同步更新所有受影响文档**（parameters / self_check / flowchart / requirements / README），execution_workflow.md 里有完整的同步矩阵。
 
 ## 架构设计
 
@@ -137,11 +137,11 @@ XYR_test/
 │   └── pipeline.py          # 流程编排器（数据存储+格式化+消费全链路）
 │
 ├── docs/                    # 文档
-│   ├── workflow.md          # 需求执行工作流（AI 必读，第一份）
-│   ├── flowchart.md         # 系统流程图（Mermaid）
-│   ├── parameters.md        # 参数/常量/CSV字段映射/Bug记录（权威来源）
-│   ├── self_check.md        # 字段链路参考手册（生成→消费）
-│   └── verify_protocol.md   # AI 可执行验证协议（大批量改代码后用）
+│   ├── execution_execution_workflow.md    # 需求执行工作流（AI 必读，第一份）
+│   ├── flowchart.md             # 系统流程图（Mermaid）
+│   ├── parameters_and_changelog.md  # 参数/常量/CSV字段映射/Bug记录（权威来源）
+│   ├── system_reference.md      # 系统参考手册（字段链路+状态机+边界场景+故障速查）
+│   └── verification_protocol.md # AI 可执行验证协议（大批量改代码后用）
 │
 └── output/<小说名>/         # 输出目录（自动创建）
     ├── novel_state.json     # 全局状态（用于断点续写）
@@ -217,6 +217,36 @@ XYR_test/
 
 ## 变更日志
 
+### 2026-05-22 用户需求传播修复（#101-#105）
+
+修复用户需求（如"不要升级流""要有后宫情节"）在后续阶段丢失的问题：
+
+- **#101** Writer/Editor 阶段丢失：`build_running_context` 新增 `story_idea` + STYLE_FIELDS 扩展 setting/review + StyleAdvisor 增加负面约束提取
+- **#102** Director 阶段仍可能违反：StyleAdvisor 增加否定检测规则 + Director/Plotter 接收 requirements + 4 个 director prompt 增加负面约束遵守指令
+- **#103** Braindump 阶段负面约束被软化：立项问答后增加 `_extract_negative_constraints` 显式提取负面约束追加到 style_description
+- **#104** 上下文窗口溢出导致从第一章重新写：写作/编辑循环加 try/except，异常时保存 `current_chapter` 再退出
+- **#105** CLI 展示截断过小：全面放宽各阈值（灵感预览 300 字、context 总预算 80K、JSON 截断 3-4K）
+
+### 2026-05-22 Director 增量生成重构（#100）
+
+重构 Director 阶段架构，从"一次性生成全部→分块精修"改为"按层级增量生成+逐个确认"：
+
+- **#100** 精修阶段前面的修改后面的内容感知不到 → 重构为增量生成架构：Director 按层级生成 world（含角色/地点规划）→ 逐个生成角色卡 → 逐个生成地点卡 → 生成大纲，每个 piece 生成时带完整已确认上下文，然后精修确认
+- 新增 4 个 prompt 文件：`director_world.txt`、`director_character.txt`、`director_location.txt`、`director_outline.txt`
+- 新增 `_build_director_context_json` 和 `_build_incremental_context` 方法，包含完整已确认数据（不剥离角色/地点，截断放宽至 2000 字符）
+- 向后兼容：旧 `phase="refining"` 的 state 仍走旧精修流程
+
+### 2026-05-22 全量自检修复（#94-#99，6 项）
+
+全量代码自检发现 6 个数据链路/类型安全问题，逐一修复：
+
+- **#94 A3** reviewer `quality_breakdown` 八维评分无消费 → pipeline._write_chapters 和 _execute_revise 中添加分维展示
+- **#95 B4** plotter 5 个字段（previous_link / opening_hook_type / ending_hook_type / characters_on_stage / scene_list）无消费 → _format_chapter_plan 补全格式化
+- **#96 F1** tracker.analyze_development 缺 isinstance 类型检查 → 补全 `isinstance(result, dict)` 防护
+- **#97 I2** _FIELD_MEANINGS 缺 psychology 和 active_validation_level 映射 → 补全中文映射
+- **#98 D3** _GENRE_STRICTNESS 未覆盖"都市"题材 → 添加 `"都市": "flexible"`
+- **#99 J1** 验证协议盲区 → B3 表格更新 + 新增 J2 检查项（prompt schema 字段消费覆盖）
+
 ### 2026-05-21 融合 chinese-novelist-skill v2.0（A-J 十组共 30 项）
 
 把 `chinese-novelist-skill/references/guides/*.md` 中的写作方法论批量注入到 prompts 与代码层，每项均与用户逐一确认（30 项融合 / 6 项跳过）：
@@ -248,7 +278,7 @@ XYR_test/
 - **#60 参数收集精简**：`_collect_params` 砍掉末尾"自定义遗忘阈值"和"禁用检查类别"两步对用户无意义的 `prompt_single` 交互。AI 已在 `style_guide.suggestions.tracking_thresholds` 给出推荐值，直接采纳；`config["disabled_checks"]` 保持空（全部启用）；尾部 `show_param_confirmed` 仍展示阈值，让用户知情
 - **#61 Director 输出分块打磨**：在 `directing` 与 `plotting` 之间插入新 phase `refining`（Phase 1.5）。`core/pipeline.py` 新增 `_refine_director_output` 编排 4 个 block——世界观 / 每张角色卡 / 每张地点卡 / 大纲——逐块走 "是/调整/重写" 三选一循环（参考 braindump 模式）。`core/refine_prompts.py` 新建文件存放 4 个 system_prompt（要求 LLM 输出结构一致的 JSON）；`core/ui.py` 新增 `show_refine_block(label, content, modified)` 将 dict/list JSON 美化后塞入 Panel
 - **断点续传**：`NovelState` 新增 `refined_blocks: list[str]`，每个 block 确认后 append（命名 `world` / `outline` / `character:<name>` / `location:<name>`）。中断后 resume 自动跳过已确认块；旧 state.json 无此字段时 `__dataclass_fields__` 白名单过滤（#43）保证默认 `[]` 注入
-- **状态机扩展**：`main.py phase_names` 新增 `"refining": "精修世界观"`；`docs/flowchart.md` 主流程图在 Phase 1 与 Phase 2 之间插入 Phase 1.5；`docs/self_check.md` 第十二章状态机 + 新第二十章「精修阶段链路」
+- **状态机扩展**：`main.py phase_names` 新增 `"refining": "精修世界观"`；`docs/flowchart.md` 主流程图在 Phase 1 与 Phase 2 之间插入 Phase 1.5；`docs/system_reference.md` 第十二章状态机 + 新第二十章「精修阶段链路」
 
 ### 2026-05-21 CLI 体验升级（Rich 渲染层 + AI 起名）
 
@@ -259,7 +289,7 @@ XYR_test/
 - **#58 Windows GBK 兼容**：`core/ui.py` 在 `import rich` 之前对 win32 平台调用 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`，解决 ✓ / ⚠ / ℹ 等 Unicode 符号在 GBK 控制台抛 UnicodeEncodeError 的问题
 - **#59 设计权衡**：原 plan 设计的 `ChapterProgress`（rich.progress.Progress Live 进度条）会与 `_handle_retire` 等 prompt_toolkit 输入抢占终端控制权。**改用** `ui.section()` 渲染章节头 + `ui.info/warn/success/hint` 滚动输出 stage 进展；`ChapterProgress` 类保留在 `core/ui.py` 供未来非交互场景使用
 - **新增依赖**：`rich>=13.0.0,<14.0.0`
-- **文档同步**：`docs/parameters.md` 第八章新增 rich / name_generator 硬编码常量记录；第十章新增 #56-#59
+- **文档同步**：`docs/parameters_and_changelog.md` 第八章新增 rich / name_generator 硬编码常量记录；第十章新增 #56-#59
 
 ### 2026-05-21 断点续写机制审计与修复
 
@@ -286,7 +316,7 @@ XYR_test/
 
 ### 2026-05-21 闭环验证执行 + 全量修复
 
-按 `docs/verify_protocol.md` 28 项验证项（A-J）执行闭环验证，发现 5 个非阻断问题（#46-#50）并全部修复：
+按 `docs/verification_protocol.md` 28 项验证项（A-J）执行闭环验证，发现 5 个非阻断问题（#46-#50）并全部修复：
 
 - **#46（D3）**：`_GENRE_STRICTNESS` 缺 `武侠/奇幻/科幻` 题材映射 — **已修复**：补充 `武侠/奇幻 → flexible`、`科幻 → strict`
 - **#47（G3）**：关键 JSON 文件非原子写入 — **已修复**：`state_manager.py` 新增 `atomic_write_json(path, data)` 工具函数（tmp+replace），pipeline 4 处直接写入 + tracker `_write_json` 全部改用该函数
@@ -297,9 +327,9 @@ XYR_test/
 
 ### 2026-05-21 文档体系重构 + StateManager 兼容性修复
 
-- **新建** `docs/verify_protocol.md`：AI 可执行验证协议，含 28 项检查（A-J）+ 标准报告格式 + 文档同步规则
-- **重写** `docs/parameters.md`：所有参数/常量/Bug 记录的权威来源，新增完整 `tracking_changes.csv` 字段中文映射表（~130 条）
-- **重构** `docs/self_check.md`：聚焦字段链路参考手册，删除与 parameters.md 重叠章节，每章添加"最后验证时间"标记
+- **新建** `docs/verification_protocol.md`：AI 可执行验证协议，含 28 项检查（A-J）+ 标准报告格式 + 文档同步规则
+- **重写** `docs/parameters_and_changelog.md`：所有参数/常量/Bug 记录的权威来源，新增完整 `tracking_changes.csv` 字段中文映射表（~130 条）
+- **重构** `docs/system_reference.md`：聚焦字段链路参考手册，删除与 parameters_and_changelog.md 重叠章节，每章添加"最后验证时间"标记
 - **更新** `docs/flowchart.md`：明确单一职责（仅 Mermaid 流程图）
 - **修复 #43**：`StateManager.load` 增加 `__dataclass_fields__` 白名单过滤，state.json 含未知字段不再 TypeError
 - **修复 self_check 4 处描述错误**：dataclass 删字段行为、init_tracking 全量重写已知 bug、auto_fix_suggestions 双路消费、consistency_score 覆盖条件
@@ -330,7 +360,7 @@ XYR_test/
 - `_condense_world` 新增 `tone`/`name` 字段提取，消除死字段（#41）
 - Reviewer `strengths[]` 注入 rewrite 反馈，指导 writer 保留优秀段落（#42）
 - Reviewer prompt 新增 5 对陈词滥调具体检测列表（#40）
-- 自检文档（`docs/self_check.md`）修正 6 处与代码不符的描述，补充 9 处遗漏内容
+- 自检文档（`docs/system_reference.md`）修正 6 处与代码不符的描述，补充 9 处遗漏内容
 
 ## 致谢
 

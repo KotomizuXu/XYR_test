@@ -159,7 +159,7 @@ class NovelPipeline:
         "悬疑": "strict", "推理": "strict", "历史": "strict", "严肃": "strict", "科幻": "strict",
         "爽文": "flexible", "复仇": "flexible", "言情": "flexible", "甜文": "flexible",
         "虐文": "flexible", "网文": "flexible", "玄幻": "flexible", "仙侠": "flexible",
-        "武侠": "flexible", "奇幻": "flexible",
+        "武侠": "flexible", "奇幻": "flexible", "都市": "flexible",
     }
 
     def _run_pipeline(self, state: NovelState) -> None:
@@ -185,33 +185,14 @@ class NovelPipeline:
         if self._interrupted:
             return
 
-        # Phase 1: Directing
+        # Phase 1: Directing (增量生成 + 逐个确认)
         if state.phase == "directing":
-            if not self._checkpoint(state, "构建世界观和大纲（耗时较长）"):
-                return
-            ui.info("[导演] 正在构建世界观和大纲...")
-            result = self.director.run(state.story_idea, state.total_chapters, style_guide=state.style_guide)
-            state.world_data = result.get("world", {})
-            state.outline = result.get("outline", {})
-            if "characters" in result:
-                state.world_data["characters"] = result["characters"]
-            if "locations" in result:
-                state.world_data["locations"] = result["locations"]
-            if "style" in result:
-                state.outline["style"] = result["style"]
-
-            novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
-            atomic_write_json(novel_dir / "world.json", result.get("world", {}))
-            atomic_write_json(novel_dir / "outline.json", result.get("outline", {}))
-
-            state.phase = "refining"
-            self.state_mgr.save(state)
-            ui.success("[导演] 世界观和大纲已完成")
+            self._run_incremental_directing(state)
 
         if self._interrupted:
             return
 
-        # Phase 1.5: Refining (用户分块打磨 Director 输出)
+        # 向后兼容：旧 state.phase == "refining" 仍有预生成数据
         if state.phase == "refining":
             self._refine_director_output(state)
 
@@ -265,7 +246,15 @@ class NovelPipeline:
         if state.phase == "writing":
             if not self._checkpoint(state, f"逐章写作 {state.total_chapters} 章（每章 3-5 分钟）"):
                 return
-            self._write_chapters(state)
+            try:
+                self._write_chapters(state)
+            except Exception as e:
+                logger.error(f"Writing phase error: {e}")
+                state.phase = "writing"
+                self.state_mgr.save(state)
+                ui.error(f"写作阶段出错：{e}")
+                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
+                raise
 
         if self._interrupted:
             return
@@ -274,7 +263,15 @@ class NovelPipeline:
         if state.phase == "editing":
             if not self._checkpoint(state, f"逐章润色 {state.total_chapters} 章"):
                 return
-            self._edit_chapters(state)
+            try:
+                self._edit_chapters(state)
+            except Exception as e:
+                logger.error(f"Editing phase error: {e}")
+                state.phase = "editing"
+                self.state_mgr.save(state)
+                ui.error(f"编辑阶段出错：{e}")
+                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
+                raise
 
         # Phase 5: Combine final output
         if state.phase == "editing" and state.current_chapter >= state.total_chapters:
@@ -353,7 +350,224 @@ class NovelPipeline:
             {"character": rec_char, "plotline": rec_plot, "foreshadowing": rec_foreshadow},
         )
 
-    # ── Refining (Phase 1.5) ─────────────────────────────────────────────
+    # ── Incremental Directing (Phase 1) ──────────────────────────────────
+
+    def _run_incremental_directing(self, state: NovelState) -> None:
+        """Phase 1: 按层级增量生成世界观、角色、地点、大纲，每个 piece 生成后精修确认。"""
+        ui.banner("导演阶段", "逐层构建世界观、角色、地点和大纲")
+
+        # 向后兼容：如果 world_data 已有完整角色/地点但没有 planned_cast，
+        # 说明是旧 state（旧 Director 一次性生成了全部），走旧精修流程
+        if state.world_data and state.world_data.get("characters") and not state.world_data.get("planned_cast"):
+            ui.hint("[兼容] 检测到旧版一次性生成数据，走精修流程")
+            self._refine_director_output(state)
+            return
+
+        if not self._checkpoint(state, "构建世界观（耗时较长）"):
+            return
+
+        # --- Step 1: 生成+精修世界观 ---
+        if "world" not in state.refined_blocks:
+            if not state.world_data:
+                ui.info("[导演] 正在生成世界观...")
+                result = self.director.run_world(
+                    state.story_idea, state.total_chapters, style_guide=state.style_guide)
+                state.world_data = result
+                self.state_mgr.save(state)
+
+            wd = state.world_data or {}
+            world_block = {k: v for k, v in wd.items()
+                           if k not in ("characters", "locations")}
+            context = self._build_incremental_context(state, exclude="world")
+            refined = self._refine_block(
+                label="世界观", initial=world_block,
+                system_prompt=REFINE_WORLD_PROMPT, context_summary=context,
+            )
+            if self._interrupted:
+                return
+            for k in list(state.world_data.keys()):
+                if k not in ("characters", "locations", "planned_cast", "planned_locations"):
+                    state.world_data.pop(k, None)
+            if isinstance(refined, dict):
+                state.world_data.update(refined)
+            state.refined_blocks.append("world")
+            self.state_mgr.save(state)
+
+        if self._interrupted:
+            return
+
+        # --- Step 2: 逐个生成+精修角色 ---
+        planned = list(state.world_data.get("planned_cast", []))
+        if not planned and state.world_data.get("characters"):
+            planned = [{"name": c.get("name"), "role": c.get("role"), "brief": ""}
+                       for c in state.world_data["characters"] if isinstance(c, dict)]
+        state.world_data.setdefault("characters", [])
+
+        for idx, hint in enumerate(planned):
+            if not isinstance(hint, dict):
+                continue
+            name = hint.get("name") or f"角色{idx + 1}"
+            tag = f"character:{name}"
+            if tag in state.refined_blocks:
+                ui.hint(f"[恢复] 跳过角色「{name}」（已确认）")
+                continue
+
+            chars = state.world_data["characters"]
+            while len(chars) <= idx:
+                chars.append(None)
+
+            if chars[idx] is None:
+                ui.info(f"[导演] 正在生成角色「{name}」...")
+                context_json = self._build_director_context_json(state)
+                char_data = self.director.run_character(hint, context_json, state.style_guide)
+                if not isinstance(char_data, dict) or not char_data:
+                    ui.warn(f"角色「{name}」生成失败，跳过")
+                    continue
+                chars[idx] = char_data
+                self.state_mgr.save(state)
+
+            context = self._build_incremental_context(state)
+            refined = self._refine_block(
+                label=f"核心角色：{name}", initial=chars[idx],
+                system_prompt=REFINE_CHARACTER_PROMPT, context_summary=context,
+            )
+            if self._interrupted:
+                return
+            if isinstance(refined, dict):
+                state.world_data["characters"][idx] = refined
+            state.refined_blocks.append(tag)
+            self.state_mgr.save(state)
+
+        if self._interrupted:
+            return
+
+        # --- Step 3: 逐个生成+精修地点 ---
+        planned_locs = list(state.world_data.get("planned_locations", []))
+        if not planned_locs and state.world_data.get("locations"):
+            planned_locs = [{"name": l.get("name"), "type": l.get("type"), "brief": ""}
+                           for l in state.world_data["locations"] if isinstance(l, dict)]
+        state.world_data.setdefault("locations", [])
+
+        for idx, hint in enumerate(planned_locs):
+            if not isinstance(hint, dict):
+                continue
+            name = hint.get("name") or f"地点{idx + 1}"
+            tag = f"location:{name}"
+            if tag in state.refined_blocks:
+                ui.hint(f"[恢复] 跳过地点「{name}」（已确认）")
+                continue
+
+            locs = state.world_data["locations"]
+            while len(locs) <= idx:
+                locs.append(None)
+
+            if locs[idx] is None:
+                ui.info(f"[导演] 正在生成地点「{name}」...")
+                context_json = self._build_director_context_json(state)
+                loc_data = self.director.run_location(hint, context_json, state.style_guide)
+                if not isinstance(loc_data, dict) or not loc_data:
+                    ui.warn(f"地点「{name}」生成失败，跳过")
+                    continue
+                locs[idx] = loc_data
+                self.state_mgr.save(state)
+
+            context = self._build_incremental_context(state)
+            refined = self._refine_block(
+                label=f"场景地点：{name}", initial=locs[idx],
+                system_prompt=REFINE_LOCATION_PROMPT, context_summary=context,
+            )
+            if self._interrupted:
+                return
+            if isinstance(refined, dict):
+                state.world_data["locations"][idx] = refined
+            state.refined_blocks.append(tag)
+            self.state_mgr.save(state)
+
+        if self._interrupted:
+            return
+
+        # --- Step 4: 生成+精修大纲 ---
+        if "outline" not in state.refined_blocks:
+            if not state.outline:
+                ui.info("[导演] 正在生成大纲...")
+                context_json = self._build_director_context_json(state)
+                outline_data = self.director.run_outline(
+                    state.story_idea, state.total_chapters,
+                    context_json, state.style_guide)
+                state.outline = outline_data if isinstance(outline_data, dict) else {}
+                self.state_mgr.save(state)
+
+            context = self._build_incremental_context(state, exclude="outline")
+            refined = self._refine_block(
+                label="大纲（主题、三幕、关键转折）", initial=state.outline,
+                system_prompt=REFINE_OUTLINE_PROMPT, context_summary=context,
+            )
+            if self._interrupted:
+                return
+            if isinstance(refined, dict):
+                state.outline = refined
+            state.refined_blocks.append("outline")
+            self.state_mgr.save(state)
+
+        if self._interrupted:
+            return
+
+        # --- Step 5: 收尾 ---
+        state.world_data.pop("planned_cast", None)
+        state.world_data.pop("planned_locations", None)
+
+        novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
+        world_for_disk = {k: v for k, v in state.world_data.items() if k not in ("characters", "locations")}
+        world_for_disk["characters"] = state.world_data.get("characters", [])
+        world_for_disk["locations"] = state.world_data.get("locations", [])
+        atomic_write_json(novel_dir / "world.json", world_for_disk)
+        atomic_write_json(novel_dir / "outline.json", state.outline)
+
+        state.phase = "plotting"
+        self.state_mgr.save(state)
+        ui.success("[导演] 全部确认，进入剧情拆章")
+
+    def _build_director_context_json(self, state: NovelState) -> str:
+        """为 Director 增量生成构建完整已确认上下文的 JSON 字符串。"""
+        parts = {}
+        wd = state.world_data or {}
+        world_part = {k: v for k, v in wd.items()
+                      if k not in ("characters", "locations", "planned_cast", "planned_locations")}
+        if world_part:
+            parts["world"] = world_part
+        confirmed_chars = [c for c in wd.get("characters", []) if isinstance(c, dict)]
+        if confirmed_chars:
+            parts["characters"] = confirmed_chars
+        confirmed_locs = [l for l in wd.get("locations", []) if isinstance(l, dict)]
+        if confirmed_locs:
+            parts["locations"] = confirmed_locs
+        return json.dumps(parts, ensure_ascii=False, indent=2)
+
+    def _build_incremental_context(self, state: NovelState, exclude: str = "") -> str:
+        """为增量精修构建上下文，包含所有已确认数据（不剥离角色/地点）。"""
+        parts: list[str] = []
+        if state.story_idea:
+            idea = state.story_idea.replace("\n", " ")
+            parts.append(f"## 故事火花\n{idea[:1000]}")
+        if state.style_description:
+            parts.append(f"## 风格偏好\n{state.style_description}")
+        if exclude != "world" and state.world_data:
+            wd = state.world_data
+            brief = {k: v for k, v in wd.items()
+                     if k not in ("characters", "locations", "planned_cast", "planned_locations")}
+            if brief:
+                parts.append(f"## 已确认世界观（参考，不必修改）\n{json.dumps(brief, ensure_ascii=False)[:4000]}")
+        confirmed_chars = [c for c in (state.world_data or {}).get("characters", []) if isinstance(c, dict)]
+        if confirmed_chars:
+            parts.append(f"## 已确认角色（保持一致）\n{json.dumps(confirmed_chars, ensure_ascii=False)[:4000]}")
+        confirmed_locs = [l for l in (state.world_data or {}).get("locations", []) if isinstance(l, dict)]
+        if confirmed_locs:
+            parts.append(f"## 已确认地点（保持一致）\n{json.dumps(confirmed_locs, ensure_ascii=False)[:3000]}")
+        if exclude != "outline" and state.outline:
+            parts.append(f"## 当前大纲（参考）\n{json.dumps(state.outline, ensure_ascii=False)[:3000]}")
+        return "\n\n".join(parts)
+
+    # ── Refining (Phase 1.5, 旧流程向后兼容) ────────────────────────────
 
     def _refine_director_output(self, state: NovelState) -> None:
         """Phase 1.5: 让用户分块打磨 Director 输出的世界观 / 角色卡 / 地点卡 / 大纲。
@@ -400,15 +614,15 @@ class NovelPipeline:
         parts: list[str] = []
         if state.story_idea:
             idea = state.story_idea.replace("\n", " ")
-            parts.append(f"## 故事火花\n{idea[:600]}")
+            parts.append(f"## 故事火花\n{idea[:1000]}")
         if state.style_description:
             parts.append(f"## 风格偏好\n{state.style_description}")
         if exclude != "world":
             wd = state.world_data or {}
             brief = {k: v for k, v in wd.items() if k not in ("characters", "locations")}
-            parts.append(f"## 当前世界观（参考，不必修改）\n{json.dumps(brief, ensure_ascii=False)[:800]}")
+            parts.append(f"## 当前世界观（参考，不必修改）\n{json.dumps(brief, ensure_ascii=False)[:2000]}")
         if exclude != "outline" and state.outline:
-            parts.append(f"## 当前大纲（参考）\n{json.dumps(state.outline, ensure_ascii=False)[:600]}")
+            parts.append(f"## 当前大纲（参考）\n{json.dumps(state.outline, ensure_ascii=False)[:1500]}")
         return "\n\n".join(parts)
 
     def _refine_world(self, state: NovelState) -> None:
@@ -545,7 +759,7 @@ class NovelPipeline:
                         inner_done = True  # 跳出内层 → 外层重生成
                         break
                     # adjust：用户给了反馈
-                    ui.info(f"根据你的意见调整「{label}」：{action[:60]}{'...' if len(action) > 60 else ''}")
+                    ui.info(f"根据你的意见调整「{label}」：{action[:120]}{'...' if len(action) > 120 else ''}")
                     new_result = self._llm_refine(
                         system_prompt,
                         label=label,
@@ -694,7 +908,7 @@ class NovelPipeline:
             print(f"    ⚠️ 支线「{plotline['name']}」停滞中（状态：{plotline.get('status', '?')}）")
         for fs in forgotten.get("foreshadowing", []):
             content = fs.get('content', '')
-            print(f"    ⚠️ 伏笔「{content[:30]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
+            print(f"    ⚠️ 伏笔「{content[:60]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
 
     def _build_forgotten_context(self, forgotten: dict) -> str:
         """Build context string from forgotten elements for writer awareness."""
@@ -744,10 +958,10 @@ class NovelPipeline:
                 print(f"  [写前检查] 写作规范：{', '.join(reqs)}")
             dealbreakers = state.style_guide.get("review", {}).get("dealbreakers", [])
             if dealbreakers:
-                print(f"  [写前检查] 红线：{', '.join(str(d) for d in dealbreakers[:3])}")
+                print(f"  [写前检查] 红线：{', '.join(str(d) for d in dealbreakers[:5])}")
             style_rules = state.style_guide.get("style_presets", {}).get("style_rules", [])
             if style_rules:
-                print(f"  [写前检查] 文风要点：{'; '.join(str(r) for r in style_rules[:3])}")
+                print(f"  [写前检查] 文风要点：{'; '.join(str(r) for r in style_rules[:5])}")
 
         # Extract key character states
         char_state = tracker._read_json("character_state.json")
@@ -799,7 +1013,7 @@ class NovelPipeline:
             completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
             running_ctx = self.ctx_mgr.build_running_context(
                 state.world_data, state.outline, completed_summaries, plan,
-                tracking_context=tracking_ctx,
+                tracking_context=tracking_ctx, story_idea=state.story_idea,
             )
 
             # ──────────── Stage 1: Writer draft（可跳过：已有 drafted 标记 + 文件存在）────────────
@@ -897,6 +1111,24 @@ class NovelPipeline:
                 calc_score = tracker.calculate_consistency_score(review)
                 review["consistency_score"] = calc_score
                 ui.success(f"[审核] 通过！质量评分：{review.get('overall_quality', '?')}/10，一致性：{calc_score}%")
+                # 展示八维质量评分（quality_breakdown 消费）
+                breakdown = review.get("quality_breakdown", {})
+                if breakdown:
+                    dim_names = {
+                        "opening_hook": "开头", "plot_progression": "剧情", "character_depth": "人物",
+                        "dialogue_quality": "对话", "ending_hook": "结尾", "pacing": "节奏",
+                        "show_not_tell": "展示", "language_quality": "语言",
+                    }
+                    dims = []
+                    for dim, label in dim_names.items():
+                        s = breakdown.get(dim)
+                        if s is not None:
+                            dims.append(f"{label}={s}")
+                    total = breakdown.get("total")
+                    if total is not None:
+                        dims.append(f"总分={total}/80")
+                    if dims:
+                        ui.hint(f"[质量分维] {', '.join(dims)}")
                 consistency = review.get("consistency_checks", {})
                 if consistency:
                     for key in ("character_issues", "world_issues", "timeline_issues",
@@ -1102,7 +1334,7 @@ class NovelPipeline:
         completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
         running_ctx = self.ctx_mgr.build_running_context(
             state.world_data, state.outline, completed_summaries, chapter_plan,
-            tracking_context=tracking_ctx,
+            tracking_context=tracking_ctx, story_idea=state.story_idea,
         )
 
         if isinstance(selected_idea, dict):
@@ -1236,6 +1468,25 @@ class NovelPipeline:
             ch.review_status = "needs_revision"
         ch.review_notes = json.dumps(review, ensure_ascii=False)
 
+        # 展示八维质量评分（quality_breakdown 消费）
+        breakdown = review.get("quality_breakdown", {})
+        if breakdown:
+            dim_names = {
+                "opening_hook": "开头", "plot_progression": "剧情", "character_depth": "人物",
+                "dialogue_quality": "对话", "ending_hook": "结尾", "pacing": "节奏",
+                "show_not_tell": "展示", "language_quality": "语言",
+            }
+            dims = []
+            for dim, label in dim_names.items():
+                s = breakdown.get(dim)
+                if s is not None:
+                    dims.append(f"{label}={s}")
+            total = breakdown.get("total")
+            if total is not None:
+                dims.append(f"总分={total}/80")
+            if dims:
+                ui.hint(f"[质量分维] {', '.join(dims)}")
+
         # Update summary and tracking
         ch.summary = self.ctx_mgr.generate_chapter_summary(final_text, ch_num)
         before = tracker.snapshot()
@@ -1263,11 +1514,11 @@ class NovelPipeline:
         for i, idea in enumerate(ideas, 1):
             print(f"  {i}. {idea.get('title', '思路')}")
             desc = idea.get('description', '')
-            print(f"     {desc[:80]}{'...' if len(desc) > 80 else ''}")
-            print(f"     预期效果：{idea.get('expected_effect', '')[:60]}")
+            print(f"     {desc[:200]}{'...' if len(desc) > 200 else ''}")
+            print(f"     预期效果：{idea.get('expected_effect', '')[:120]}")
             notes = idea.get('consistency_notes', '')
             if notes and notes != '无':
-                print(f"     一致性提醒：{notes[:60]}")
+                print(f"     一致性提醒：{notes[:120]}")
             print()
 
         print(f"  0. 不使用以上思路，直接用我的原始意见")

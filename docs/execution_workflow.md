@@ -100,7 +100,7 @@
 | ② CLI 冒烟 | `py -3.10 main.py status`（或最贴近改动的命令） | 改了 main.py / pipeline.py / ui.py |
 | ③ 单测 / Repl 验证 | `py -3.10 -c "from xxx import f; assert f(...) == ..."` | 改了纯函数（如 `_clean_candidate`、`_sanitize_novel_name`） |
 | ④ 视觉冒烟 | 跑实际命令观察输出 | 改了 ui.py / Rich Panel / Table |
-| ⑤ 数据链路追溯 | 按 `docs/verify_protocol.md` 第二章相关项执行 | 改了 prompt schema / context_manager / tracker |
+| ⑤ 数据链路追溯 | 按 `docs/verification_protocol.md` 第二章相关项执行 | 改了 prompt schema / context_manager / tracker |
 
 **完工判据**：
 - ① 必须输出 `ok` 才能继续
@@ -123,28 +123,28 @@
 
 | 触发条件 | 需要更新的文档 | 更新内容 |
 |---------|--------------|---------|
-| **任何代码变更** | `docs/parameters.md` 第十章 bug fix 记录 | 追加一行（编号、严重度、问题描述、修复位置） |
+| **任何代码变更** | `docs/parameters_and_changelog.md` 第十章 bug fix 记录 | 追加一行（编号、严重度、问题描述、修复位置） |
 | **任何代码变更** | `README.md` 变更日志 | 追加日期 + 简述章节（参考既有章节风格） |
-| 新增 / 修改 prompt schema 字段 | `docs/self_check.md` 对应章节 + 章末"最后验证时间" | 更新字段链路表 |
-| 新增 / 修改 prompt schema 字段 | `docs/parameters.md` 第六章 L1/L2/L3 追踪字段表 | 更新对应行 |
-| `_FIELD_MEANINGS` 增删 | `docs/parameters.md` 第九章 CSV 字段映射 | 同步字段路径 → 中文含义对照表 |
-| 新增 / 修改 tracking 字段（任意 6 个文件）| `docs/parameters.md` 第六章 + 第九章 | 同时更新链路表和 CSV 字段映射 |
-| 新增 / 修改 config.yaml 参数 | `docs/parameters.md` 第一~三章对应配置表 | 更新参数行 |
-| 新增 / 修改硬编码字典（_BANNED / _CLICHE / _GENRE 等）| `docs/parameters.md` 第七章 + `docs/self_check.md` 第十八章 | 同步条目 + 检查多处 prompt 同步点 |
+| 新增 / 修改 prompt schema 字段 | `docs/system_reference.md` 对应章节 + 章末"最后验证时间" | 更新字段链路表 |
+| 新增 / 修改 prompt schema 字段 | `docs/parameters_and_changelog.md` 第六章 L1/L2/L3 追踪字段表 | 更新对应行 |
+| `_FIELD_MEANINGS` 增删 | `docs/parameters_and_changelog.md` 第九章 CSV 字段映射 | 同步字段路径 → 中文含义对照表 |
+| 新增 / 修改 tracking 字段（任意 6 个文件）| `docs/parameters_and_changelog.md` 第六章 + 第九章 | 同时更新链路表和 CSV 字段映射 |
+| 新增 / 修改 config.yaml 参数 | `docs/parameters_and_changelog.md` 第一~三章对应配置表 | 更新参数行 |
+| 新增 / 修改硬编码字典（_BANNED / _CLICHE / _GENRE 等）| `docs/parameters_and_changelog.md` 第七章 + `docs/system_reference.md` 第十八章 | 同步条目 + 检查多处 prompt 同步点 |
 | 新增 / 修改主流程 / 数据流 | `docs/flowchart.md` | 更新对应 Mermaid 图 |
 | 新增 Agent 或 Phase | `README.md` 架构图 + 核心特性 | 同步更新 |
 | 新增 / 升级 Python 依赖 | `requirements.txt` + `README.md` 环境要求 | 双向同步 |
-| 新增用户输入点 | `docs/self_check.md` 第十七章用户输入校验清单 | 追加一行（位置 / 校验 / 风险） |
-| 新增 CLI 输出点（ui.* 或 print） | `docs/self_check.md` 第十九章 19.5 输出点全览 | 追加一行 |
-| 修改 CLI 渲染层（ui.py / name_generator.py）| `docs/self_check.md` 第十九章 + `docs/parameters.md` 第八章硬编码常量 + `README.md` 变更日志 | 三处同步 |
-| 发现验证协议本身有盲区 | `docs/verify_protocol.md` | 补充或修正验证项 |
+| 新增用户输入点 | `docs/system_reference.md` 第十七章用户输入校验清单 | 追加一行（位置 / 校验 / 风险） |
+| 新增 CLI 输出点（ui.* 或 print） | `docs/system_reference.md` 第十九章 19.5 输出点全览 | 追加一行 |
+| 修改 CLI 渲染层（ui.py / name_generator.py）| `docs/system_reference.md` 第十九章 + `docs/parameters_and_changelog.md` 第八章硬编码常量 + `README.md` 变更日志 | 三处同步 |
+| 发现验证协议本身有盲区 | `docs/verification_protocol.md` | 补充或修正验证项 |
 | 以上均不适用 | — | 在阶段 6 回告时显式注明"文档已是最新，无需同步" |
 
 ### 5.2 同步顺序（推荐）
 
-1. **parameters.md** 第十章 bug fix（最先做，因为是事实记录）
-2. **parameters.md** 其余章节（参数/字段/常量）
-3. **self_check.md**（字段链路、输入点、输出点）
+1. **parameters_and_changelog.md** 第十章 bug fix（最先做，因为是事实记录）
+2. **parameters_and_changelog.md** 其余章节（参数/字段/常量）
+3. **system_reference.md**（字段链路、输入点、输出点）
 4. **flowchart.md**（如适用）
 5. **README.md** 变更日志（最后做，等其他文档定稿后总结）
 6. **requirements.txt**（依赖变更时）
@@ -198,7 +198,7 @@
 4. ❌ 在 bug 修复任务中"顺手"做风格清理 / 重构 / 抽象
 5. ❌ 在 Windows 上写代码不考虑 GBK 控制台编码兼容（必须走 `core/ui.py` 的 console）
 6. ❌ 新增依赖只改 requirements.txt 不改 README，或反之
-7. ❌ 新增追踪字段只改 tracker.py 不同步 `_FIELD_MEANINGS` / parameters.md CSV 映射
+7. ❌ 新增追踪字段只改 tracker.py 不同步 `_FIELD_MEANINGS` / parameters_and_changelog.md CSV 映射
 8. ❌ 改 prompt schema 只改 prompt 不查 context_manager / 下游 Agent 是否消费
 9. ❌ 添加注释解释"代码做什么"而非"为什么这么做"
 10. ❌ 在用户没批准的情况下做破坏性操作（`git reset --hard`、`rm -rf`、force push）
@@ -230,12 +230,12 @@
 
 | 文档 | 角色 | 何时引用 |
 |------|------|---------|
-| `docs/workflow.md`（本文件）| 流程纲领 | **接到需求时第一份读** |
-| `docs/verify_protocol.md` | 28 项 AI 执行型验证清单 | 阶段 4 验证项 ⑤ 数据链路追溯时 |
-| `docs/parameters.md` | 参数 / 常量 / bug fix 历史的权威来源 | 阶段 5 同步矩阵首要目标 |
-| `docs/self_check.md` | 字段链路（生成→消费）参考手册 | 阶段 3 改代码前查链路 / 阶段 5 同步 |
+| `docs/execution_execution_workflow.md`（本文件）| 流程纲领 | **接到需求时第一份读** |
+| `docs/verification_protocol.md` | 28 项 AI 执行型验证清单 | 阶段 4 验证项 ⑤ 数据链路追溯时 |
+| `docs/parameters_and_changelog.md` | 参数 / 常量 / bug fix 历史的权威来源 | 阶段 5 同步矩阵首要目标 |
+| `docs/system_reference.md` | 字段链路（生成→消费）参考手册 | 阶段 3 改代码前查链路 / 阶段 5 同步 |
 | `docs/flowchart.md` | 主流程 Mermaid 图 | 阶段 5 主流程有变时同步 |
 | `README.md` | 对外说明 + 变更日志 | 阶段 5 收尾同步 |
 
-> **冲突仲裁规则**：本文件（workflow.md）规定**做事顺序**；verify_protocol.md 规定**怎么验证**；parameters.md / self_check.md 是**事实底稿**。
-> 流程问题以 workflow.md 为准；验证项以 verify_protocol.md 为准；数据/参数以代码为准（文档与代码不符以代码为准，但必须立刻把文档同步过来）。
+> **冲突仲裁规则**：本文件（execution_workflow.md）规定**做事顺序**；verification_protocol.md 规定**怎么验证**；parameters_and_changelog.md / system_reference.md 是**事实底稿**。
+> 流程问题以 execution_workflow.md 为准；验证项以 verification_protocol.md 为准；数据/参数以代码为准（文档与代码不符以代码为准，但必须立刻把文档同步过来）。

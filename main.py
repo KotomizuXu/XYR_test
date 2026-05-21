@@ -166,7 +166,7 @@ def _braindump_section(llm: LLMClient, section_key: str, section_label: str,
                 break  # 跳出内层循环，外层重新生成
 
             # 用户输入了调整意见 → 修改 → 再展示 → 继续内层循环
-            ui.info(f"收到，根据你的意见调整：{action[:60]}{'...' if len(action) > 60 else ''}")
+            ui.info(f"收到，根据你的意见调整：{action[:120]}{'...' if len(action) > 120 else ''}")
             result = llm.chat(
                 _build_braindump_system(style),
                 f"## 上下文\n{context}\n\n## 之前生成的{section_label}\n{result}\n\n## 用户的调整意见\n{action}\n\n请根据用户意见修改{section_label}，只输出修改后的内容。",
@@ -201,6 +201,35 @@ def _braindump(idea: str, name: str, style: str | None) -> str:
     ui.show_braindump_summary(summary_pairs)
 
     return "\n\n".join(parts)
+
+
+def _extract_negative_constraints(enriched_idea: str, style: str | None) -> str | None:
+    """从立项问答结果中提取用户的负面约束（如"不要升级流"），追加到风格描述。"""
+    config = load_config()
+    llm = LLMClient(config)
+
+    system = "你是一个文本分析助手。只输出结果，不要解释。"
+    user_msg = (
+        "请从以下故事构思中提取用户明确表达的**负面约束**——即用户说\"不要\"\"避免\"\"禁止\"\"没有\"\"不能\"等"
+        "否定表述的内容（如\"不要升级流\"→\"禁止升级/等级体系\"，\"避免后宫\"→\"禁止后宫/多角恋\"）。\n\n"
+        f"{enriched_idea}\n\n"
+        "如果存在负面约束，请输出一行逗号分隔的简短约束列表（如：禁止升级体系,禁止后宫,避免虐心）。\n"
+        "如果没有负面约束，只输出\"无\"。"
+    )
+
+    try:
+        result = llm.chat(system, user_msg, temperature=0.2).strip()
+    except Exception:
+        return style
+
+    if not result or result == "无":
+        return style
+
+    # 追加到 style_description 末尾
+    constraint_text = f"【用户明确禁止的元素：{result}】"
+    if style:
+        return f"{style} {constraint_text}"
+    return constraint_text
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +362,9 @@ def cmd_new():
         ui.hint("你可以重试（python main.py new）")
         return
 
+    # 从立项问答结果中提取负面约束，显式追加到风格描述中
+    style = _extract_negative_constraints(enriched_idea, style)
+
     pipeline = NovelPipeline()
     pipeline.start_new_novel(enriched_idea, name, style=style)
 
@@ -390,7 +422,7 @@ def cmd_status():
         state = mgr.load(name)
         if not state:
             continue
-        idea_preview = state.story_idea[:40] + ("..." if len(state.story_idea) > 40 else "")
+        idea_preview = state.story_idea[:100] + ("..." if len(state.story_idea) > 100 else "")
         rows.append({
             "name": name,
             "phase": phase_names.get(state.phase, state.phase),

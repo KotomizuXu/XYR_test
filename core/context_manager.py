@@ -15,7 +15,10 @@ SUMMARY_PROMPT = """请为以下小说章节生成一份简洁的摘要，包含
 章节内容：
 {chapter_text}"""
 
-CONTEXT_TEMPLATE = """## 世界观与角色参考
+CONTEXT_TEMPLATE = """## 用户原始需求
+{story_idea}
+
+## 世界观与角色参考
 {world_ref}
 
 ## 故事主线
@@ -27,7 +30,10 @@ CONTEXT_TEMPLATE = """## 世界观与角色参考
 ## 当前章节剧情要点
 {current_plan}"""
 
-FULL_CONTEXT_TEMPLATE = """## 世界观与角色参考
+FULL_CONTEXT_TEMPLATE = """## 用户原始需求
+{story_idea}
+
+## 世界观与角色参考
 {world_ref}
 
 ## 故事主线
@@ -44,7 +50,7 @@ FULL_CONTEXT_TEMPLATE = """## 世界观与角色参考
 
 # Rough char budget: leave room for output within 128K context
 # Chinese ~1.5 token/char on average
-MAX_CONTEXT_CHARS = 60000
+MAX_CONTEXT_CHARS = 80000
 
 
 class ContextManager:
@@ -74,14 +80,17 @@ class ContextManager:
         completed_summaries: list[str],
         current_chapter_plan: dict,
         tracking_context: str = "",
+        story_idea: str = "",
     ) -> str:
         world_ref = self._condense_world(world_data)
         outline_ref = self._condense_outline(outline)
         summaries_text = self._format_summaries(completed_summaries)
         current_plan = self._format_chapter_plan(current_chapter_plan)
+        idea_text = story_idea.replace("\n", " ")[:1000] if story_idea else "（无）"
 
         if tracking_context:
             result = FULL_CONTEXT_TEMPLATE.format(
+                story_idea=idea_text,
                 world_ref=world_ref,
                 outline_ref=outline_ref,
                 summaries=summaries_text,
@@ -90,6 +99,7 @@ class ContextManager:
             )
         else:
             result = CONTEXT_TEMPLATE.format(
+                story_idea=idea_text,
                 world_ref=world_ref,
                 outline_ref=outline_ref,
                 summaries=summaries_text,
@@ -99,11 +109,11 @@ class ContextManager:
         # Truncate if context exceeds budget
         if len(result) > MAX_CONTEXT_CHARS:
             logger.warning(f"Context too long ({len(result)} chars), truncating summaries")
-            result = self._truncate_context(result, completed_summaries, world_ref, outline_ref, tracking_context, current_chapter_plan)
+            result = self._truncate_context(result, completed_summaries, world_ref, outline_ref, tracking_context, current_chapter_plan, story_idea)
 
         return result
 
-    def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict) -> str:
+    def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict, story_idea: str = "") -> str:
         # Tiered compression: keep last 3 full, compress 4-10, drop oldest
         total = len(summaries)
         fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 500
@@ -120,7 +130,7 @@ class ContextManager:
         tier2 = summaries[max(0, total - 10): max(0, total - 3)]
         tier2_start = max(0, total - 10) + 1
         for idx, s in enumerate(tier2, tier2_start):
-            short = s[:60] + "…" if len(s) > 60 else s
+            short = s[:100] + "…" if len(s) > 100 else s
             kept_lines.append(f"第{idx}章（简）：{short}")
 
         # Tier 1: last 3 chapters — full summary
@@ -140,9 +150,11 @@ class ContextManager:
 
         summaries_text = "\n\n".join(kept_lines)
         current_plan_text = self._format_chapter_plan(current_plan)
+        idea_text = story_idea.replace("\n", " ")[:1000] if story_idea else "（无）"
 
         if tracking_context:
             return FULL_CONTEXT_TEMPLATE.format(
+                story_idea=idea_text,
                 world_ref=world_ref,
                 outline_ref=outline_ref,
                 summaries=summaries_text,
@@ -150,6 +162,7 @@ class ContextManager:
                 current_plan=current_plan_text,
             )
         return CONTEXT_TEMPLATE.format(
+            story_idea=idea_text,
             world_ref=world_ref,
             outline_ref=outline_ref,
             summaries=summaries_text,
@@ -171,7 +184,7 @@ class ContextManager:
         if "unique_elements" in world_data:
             elements = world_data["unique_elements"]
             if isinstance(elements, list) and elements:
-                lines.append(f"世界特色：{'；'.join(str(e) for e in elements[:5])}")
+                lines.append(f"世界特色：{'；'.join(str(e) for e in elements[:8])}")
         if "rules" in world_data:
             lines.append(f"世界规则：{world_data['rules']}")
         if "social_structure" in world_data:
@@ -188,29 +201,29 @@ class ContextManager:
             if isinstance(geo, dict):
                 locs = geo.get("main_locations", [])
                 if locs:
-                    loc_names = [l.get("name", str(l)) if isinstance(l, dict) else str(l) for l in locs[:5]]
+                    loc_names = [l.get("name", str(l)) if isinstance(l, dict) else str(l) for l in locs[:8]]
                     lines.append(f"主要地点：{'、'.join(loc_names)}")
         if "factions" in world_data:
             factions = world_data["factions"]
             if isinstance(factions, list) and factions:
-                names = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in factions[:5]]
+                names = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in factions[:8]]
                 lines.append(f"势力：{'、'.join(names)}")
         if "history" in world_data:
             history = world_data["history"]
             if isinstance(history, list) and history:
-                events = [h.get("event", str(h)) if isinstance(h, dict) else str(h) for h in history[:3]]
+                events = [h.get("event", str(h)) if isinstance(h, dict) else str(h) for h in history[:5]]
                 lines.append(f"重要历史事件：{'；'.join(events)}")
         if "daily_life" in world_data:
             dl = world_data["daily_life"]
             if isinstance(dl, dict):
                 parts = [f"{k}：{v}" for k, v in dl.items() if v]
                 if parts:
-                    lines.append(f"日常生活：{'；'.join(parts[:4])}")
+                    lines.append(f"日常生活：{'；'.join(parts[:6])}")
         if "characters" in world_data:
             chars = world_data["characters"]
             if isinstance(chars, list):
                 lines.append("角色：")
-                for c in chars[:8]:
+                for c in chars[:12]:
                     name = c.get("name", "")
                     role = c.get("role", "")
                     desc = c.get("description", c.get("personality", ""))
@@ -287,4 +300,19 @@ class ContextManager:
             lines.append(f"场景地点：{plan['location']}")
         if "time" in plan:
             lines.append(f"故事时间：{plan['time']}")
+        if "previous_link" in plan:
+            lines.append(f"承上启下：{plan['previous_link']}")
+        if "opening_hook_type" in plan:
+            lines.append(f"章首引子类型：{plan['opening_hook_type']}")
+        if "ending_hook_type" in plan:
+            lines.append(f"章尾悬念类型：{plan['ending_hook_type']}")
+        if "characters_on_stage" in plan:
+            lines.append(f"实际登场角色：{', '.join(plan['characters_on_stage'])}")
+        if "scene_list" in plan and plan["scene_list"]:
+            lines.append("场景列表：")
+            for scene in plan["scene_list"]:
+                if isinstance(scene, dict):
+                    lines.append(f"  - {scene.get('name', '?')}（地点：{scene.get('location', '?')}，目的：{scene.get('purpose', '?')}）")
+                else:
+                    lines.append(f"  - {scene}")
         return "\n".join(lines)

@@ -1,27 +1,27 @@
 # XYR_test 项目协作约定（AI 必读）
 
-## 第一条：先读 workflow.md
+## 第一条：先读 execution_workflow.md
 
-接到任何代码变更需求时，**第一份要读的文档是 `docs/workflow.md`**，再按它定义的 6 个阶段（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）依次执行。
+接到任何代码变更需求时，**第一份要读的文档是 `docs/execution_workflow.md`**，再按它定义的 6 个阶段（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）依次执行。
 
 跳过文档同步阶段 = 任务未完成。
 
 ## 第二条：文档同步是硬性要求
 
-每次代码变更**必须同步更新**以下文档（按 workflow.md 第 5 章同步矩阵逐行判断）：
+每次代码变更**必须同步更新**以下文档（按 execution_workflow.md 第 5 章同步矩阵逐行判断）：
 
-- `docs/parameters.md` ——参数 / 常量 / Bug fix 记录的权威来源
-- `docs/self_check.md` ——字段链路（生成→消费）参考手册
+- `docs/parameters_and_changelog.md` ——参数 / 常量 / Bug fix 记录的权威来源
+- `docs/system_reference.md` ——字段链路（生成→消费）参考手册
 - `docs/flowchart.md` ——主流程 Mermaid 图（如适用）
 - `README.md` ——架构 / 核心特性 / 变更日志
 - `requirements.txt` ——依赖（双向同步：改了就更新 README 环境要求）
-- `docs/verify_protocol.md` ——发现验证协议本身有盲区时
+- `docs/verification_protocol.md` ——发现验证协议本身有盲区时
 
 特殊情况：
 
-- **CSV 字段映射** —— 新增 / 修改追踪字段必须同步 `_FIELD_MEANINGS`（tracker.py）+ `docs/parameters.md` 第九章 CSV 字段映射表（~130 条）
-- **硬编码字典** —— `_BANNED_REPLACEMENTS` / `_CLICHE_PAIRS` / `_GENRE_STRICTNESS` 等改动有多处同步点，见 `docs/self_check.md` 第十八章
-- **CLI 渲染层** —— ui.py / name_generator.py 改动需同步 self_check.md 第十九章 + parameters.md 第八章硬编码常量 + README 变更日志
+- **CSV 字段映射** —— 新增 / 修改追踪字段必须同步 `_FIELD_MEANINGS`（tracker.py）+ `docs/parameters_and_changelog.md` 第九章 CSV 字段映射表（~130 条）
+- **硬编码字典** —— `_BANNED_REPLACEMENTS` / `_CLICHE_PAIRS` / `_GENRE_STRICTNESS` 等改动有多处同步点，见 `docs/system_reference.md` 第十八章
+- **CLI 渲染层** —— ui.py / name_generator.py 改动需同步 system_reference.md 第十九章 + parameters_and_changelog.md 第八章硬编码常量 + README 变更日志
 
 ## 第三条：Python 版本
 
@@ -45,4 +45,4 @@
 
 ---
 
-详细流程见 [`docs/workflow.md`](docs/workflow.md)。
+详细流程见 [`docs/execution_workflow.md`](docs/execution_workflow.md)。

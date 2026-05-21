@@ -59,6 +59,11 @@ _FIELD_MEANINGS = [
     ("character_state.consistency.personalityTraits", "性格一致性（角色→性格特征）"),
     ("character_state.consistency.speechPatterns", "语言风格一致性（角色→说话习惯）"),
     ("character_state.consistency.warnings", "一致性警告列表"),
+    ("character_state.psychology", "角色心理深度"),
+    (".false_belief", "角色错误信念"),
+    (".want", "角色表面渴望"),
+    (".need", "角色深层需求"),
+    (".ghost", "角色心魔/旧伤"),
     # --- timeline ---
     ("timeline.novel", "小说名称"),
     ("timeline.lastUpdated", "最后更新时间"),
@@ -173,6 +178,7 @@ _FIELD_MEANINGS = [
     ("validation_rules.validation_levels.deep", "深度验证级别"),
     ("validation_rules.validation_levels.deep.checks", "深度验证检查项"),
     ("validation_rules.validation_levels.deep.time_estimate", "预计耗时"),
+    ("validation_rules.active_validation_level", "当前激活的验证级别（quick/standard/deep）"),
     # --- locations ---
     ("locations.novel", "小说名称"),
     ("locations.lastUpdated", "最后更新时间"),
@@ -1586,8 +1592,8 @@ class Tracker:
 
         result = llm.chat_json(system_prompt, user_msg, temperature=0.3)
 
-        if not result:
-            logger.warning("Development analysis returned empty result")
+        if not isinstance(result, dict):
+            logger.warning(f"Development analysis returned non-dict: {type(result).__name__}")
             return
 
         now = self._now()

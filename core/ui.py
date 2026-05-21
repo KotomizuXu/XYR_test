@@ -72,7 +72,7 @@ def show_braindump_intro(idea: str, name: str, style: str | None) -> None:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="dim cyan", no_wrap=True)
     table.add_column()
-    table.add_row("原始灵感", idea[:120] + ("..." if len(idea) > 120 else ""))
+    table.add_row("原始灵感", idea[:300] + ("..." if len(idea) > 300 else ""))
     table.add_row("小说名称", name)
     if style:
         table.add_row("风格偏好", style)

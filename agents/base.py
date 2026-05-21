@@ -10,11 +10,11 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 # 各 Agent 需要的 style_guide 字段（未列出的 Agent 保留全量）
 STYLE_FIELDS = {
-    "director": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets"],
-    "plotter": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets"],
+    "director": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets", "requirements"],
+    "plotter": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets", "requirements"],
     "writer": ["tone", "pacing", "plot", "character", "worldbuilding", "setting", "style_presets", "requirements"],
     "reviewer": ["tone", "character", "worldbuilding", "review", "requirements", "setting"],
-    "editor": ["tone", "pacing", "character", "editing", "style_presets", "requirements"],
+    "editor": ["tone", "pacing", "character", "editing", "style_presets", "requirements", "setting", "review"],
     "critic": ["character", "worldbuilding", "setting", "requirements"],
 }
 

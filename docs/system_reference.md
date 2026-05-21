@@ -1,14 +1,14 @@
 # 数据链路自检清单
 
 本文档是**字段链路参考手册**，记录每个 AI 生成字段从「生成 → 存储 → 格式化 → 消费」的完整流转路径。
-当 AI 执行 `docs/verify_protocol.md` 中的验证项时，需要查阅此文档了解链路细节。
+当 AI 执行 `docs/verification_protocol.md` 中的验证项时，需要查阅此文档了解链路细节。
 
-> **接到需求时不要从这里开始读** —— 先读 `docs/workflow.md`（流程总纲）。本文件是事实底稿，不是执行流程。
+> **接到需求时不要从这里开始读** —— 先读 `docs/execution_workflow.md`（流程总纲）。本文件是事实底稿，不是执行流程。
 
 **与其他文档的分工**：
-- 参数值/硬编码常量/CSV 字段映射 → `docs/parameters.md`（权威来源）
+- 参数值/硬编码常量/CSV 字段映射 → `docs/parameters_and_changelog.md`（权威来源）
 - 流程图/数据流向图 → `docs/flowchart.md`
-- AI 验证协议 → `docs/verify_protocol.md`
+- AI 验证协议 → `docs/verification_protocol.md`
 - 字段链路细节（生成→消费）→ 本文档
 
 **覆盖范围**：
@@ -101,7 +101,7 @@ Director 输出 JSON 包含 5 个顶级 key：`world`、`characters`、`location
 
 ## 二、Plotter 输出字段链路
 
-> *最后验证：2026-05-21*
+> *最后验证：2026-05-22*
 
 Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 
@@ -126,6 +126,11 @@ Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 | `location` | ✅ | ✅ `场景地点：{...}` | writer, tracker (L1 currentState) |
 | `time` | ✅ | ✅ `故事时间：{...}` | writer, tracker (L1 timeline) |
 | `duration` | ✅ | ❌（不在 _format_chapter_plan，但被 tracker `_init_timeline` 消费为 `timeline.events[].duration`） | tracker |
+| `previous_link` | ✅ | ✅ `承上启下：{...}` | writer |
+| `opening_hook_type` | ✅ | ✅ `章首引子类型：{...}` | writer |
+| `ending_hook_type` | ✅ | ✅ `章尾悬念类型：{...}` | writer |
+| `characters_on_stage` | ✅ | ✅ `实际登场角色：{...}` | writer |
+| `scene_list` | ✅ | ✅ `场景列表：` 逐场景输出 | writer |
 
 **检查点**：新增 plotter 输出字段后，需同步检查：
 1. `plotter_system.txt` 的 JSON schema 是否包含该字段
@@ -136,7 +141,7 @@ Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 
 ## 三、Tracker 数据链路
 
-> *最后验证：2026-05-21*
+> *最后验证：2026-05-22*
 
 ### 3.1 追踪文件初始化
 
@@ -245,13 +250,13 @@ FULL_CONTEXT_TEMPLATE:
 
 > *最后验证：2026-05-21*
 
-> **本节内容已迁移至 `docs/parameters.md` 第四章「风格指南」+「STYLE_FIELDS 分发过滤」表格**。
+> **本节内容已迁移至 `docs/parameters_and_changelog.md` 第四章「风格指南」+「STYLE_FIELDS 分发过滤」表格**。
 > 那里是 STYLE_FIELDS 字段分发的权威来源，含每个 Agent 收到的字段列表。
 >
 > 检查点（保留在此处）：
 > - `_agent_name()` 返回值是否在 `STYLE_FIELDS` 中有对应条目
 > - PlotAgent 的 `_agent_name()` 应返回 `"plotter"`（由 `_AGENT_CONFIG_KEYS` 映射，而不是 `"plot"`）
-> - 修改 STYLE_FIELDS 后，需同步更新 parameters.md 第四章
+> - 修改 STYLE_FIELDS 后，需同步更新 parameters_and_changelog.md 第四章
 
 ---
 
@@ -416,7 +421,7 @@ revise_chapter → critic.run → _select_idea → _execute_revise
    → 是：在 pipeline.py 的对应阶段添加消费逻辑
    ↓
 4. 确认无人需要 → 在 prompt 中标注"仅供存档"，
-   或在 self_check.md 中记录为"有意不消费"并说明理由
+   或在 system_reference.md 中记录为"有意不消费"并说明理由
 ```
 
 **原则**：AI 生成的每个字段都是 token 成本。如果值得让 AI 生成，就值得被正确消费。只有经过上述 4 步确认后，才可标记为"有意不消费"。
@@ -427,25 +432,25 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 
 | 文档 | 触发条件 | 需要更新的内容 |
 |------|---------|--------------|
-| `docs/parameters.md` | 新增/修改 config 参数、新增 bug fix、新增追踪字段、新增常量 | 参数表 + bug fix 记录 + 字段数 + CSV 格式 |
+| `docs/parameters_and_changelog.md` | 新增/修改 config 参数、新增 bug fix、新增追踪字段、新增常量 | 参数表 + bug fix 记录 + 字段数 + CSV 格式 |
 | `docs/flowchart.md` | 修改数据流、新增存储环节、新增 Agent 交互 | 数据流图 + 写作循环图 + 文件结构 |
 | `README.md` | 新增功能、修改架构、修复 bug、修改依赖 | 架构图 + 核心特性 + 变更日志 + 项目结构 + 配置说明 |
 | `requirements.txt` | 新增/升级依赖 | 添加包 + 版本约束 |
-| `docs/self_check.md` | 新增追踪文件、新增硬编码字典、新增 prompt schema、新增输入点 | 对应章节的清单更新 |
+| `docs/system_reference.md` | 新增追踪文件、新增硬编码字典、新增 prompt schema、新增输入点 | 对应章节的清单更新 |
 
 **快速判断规则**：
 
 ```
-改了 prompt schema？      → parameters.md + self_check.md (十八章)
-改了 pipeline 存储？      → flowchart.md + parameters.md
-改了 context_manager？    → self_check.md (第一~四章) + parameters.md (字段数)
-改了 tracker？           → self_check.md (第三/七/十八章) + parameters.md
-改了 config.yaml？       → parameters.md + README.md
+改了 prompt schema？      → parameters_and_changelog.md + system_reference.md (十八章)
+改了 pipeline 存储？      → flowchart.md + parameters_and_changelog.md
+改了 context_manager？    → system_reference.md (第一~四章) + parameters_and_changelog.md (字段数)
+改了 tracker？           → system_reference.md (第三/七/十八章) + parameters_and_changelog.md
+改了 config.yaml？       → parameters_and_changelog.md + README.md
 新增了依赖？             → requirements.txt + README.md
-修复了 bug？             → parameters.md (bug fix 记录) + README.md (变更日志)
-新增了用户输入点？        → self_check.md (第十七章)
-新增了硬编码字典/常量？   → self_check.md (第十八章) + parameters.md
-改了 ui.py / name_generator.py？ → self_check.md (第十九章) + parameters.md (第八章硬编码) + README.md
+修复了 bug？             → parameters_and_changelog.md (bug fix 记录) + README.md (变更日志)
+新增了用户输入点？        → system_reference.md (第十七章)
+新增了硬编码字典/常量？   → system_reference.md (第十八章) + parameters_and_changelog.md
+改了 ui.py / name_generator.py？ → system_reference.md (第十九章) + parameters_and_changelog.md (第八章硬编码) + README.md
 ```
 
 #### 自检文档自评
@@ -581,11 +586,13 @@ tmp_path.replace(state_path)  # 原子 rename
 ### 12.1 阶段转换图
 
 ```
-styling → collecting_params → directing → refining → plotting → writing → editing → complete
-                                              ↑                     ↑
-                                         Phase 1.5            Phase 2.5
-                                       (用户分块打磨)         (追踪初始化)
+styling → collecting_params → directing → plotting → writing → editing → complete
+                                    ↑                  ↑
+                              Phase 1              Phase 2.5
+                         (增量生成+逐个确认)       (追踪初始化)
 ```
+
+> 旧版 phase `refining` 仍被识别（向后兼容），走 `_refine_director_output()` 旧流程。
 
 每个 phase 用 `if state.phase == "xxx"` 守卫，顺序排列在 `_run_pipeline` 中。通过后设置 `state.phase = "next_phase"` 并 save。
 
@@ -597,8 +604,8 @@ styling → collecting_params → directing → refining → plotting → writin
 |------|---------|------|
 | styling | ✅ | 重新生成 style_guide |
 | collecting_params | ✅ | 重新收集参数 |
-| directing | ✅ | 重新生成世界观 |
-| refining | ✅ | 已确认的 block 通过 `state.refined_blocks` 跳过，未确认的从断点续上 |
+| directing | ✅ | 增量生成：已确认的 block 通过 `state.refined_blocks` 跳过，未确认的从断点续上 |
+| refining（旧） | ✅ | 向后兼容旧 state，走 `_refine_director_output()` |
 | plotting | ✅ | 重新生成章节计划 |
 | writing（从中间章节） | ✅ | `current_chapter` 索引从 i 继续 |
 | editing（从中间章节） | ✅ | 同上 |
@@ -661,11 +668,11 @@ pending → drafted → reviewed → tracked
 
 > *最后验证：2026-05-21*
 
-> **本节内容已迁移至 `docs/parameters.md`**：
-> - config.yaml 字段消费清单 → `parameters.md` 第一章 + 第二章 + 第三章
-> - 硬编码常量审计 → `parameters.md` 第八章「LLM 客户端与 pipeline 行为参数」
+> **本节内容已迁移至 `docs/parameters_and_changelog.md`**：
+> - config.yaml 字段消费清单 → `parameters_and_changelog.md` 第一章 + 第二章 + 第三章
+> - 硬编码常量审计 → `parameters_and_changelog.md` 第八章「LLM 客户端与 pipeline 行为参数」
 >
-> 修改 config.yaml 或硬编码常量后，需同步更新 parameters.md 对应章节。
+> 修改 config.yaml 或硬编码常量后，需同步更新 parameters_and_changelog.md 对应章节。
 
 ---
 
@@ -687,6 +694,7 @@ Reviewer 返回一个完整 JSON，包含 7 个顶级字段。每个字段都必
 | `overall_quality` | int | `pipeline.py` `_write_chapters` | 仅打印展示，不进入后续逻辑 |
 | `strengths[]` | list | `pipeline.py` `_write_chapters` + `_execute_revise` | 注入 rewrite 反馈，告诉 writer 哪些部分要保留 |
 | `tracking_updates` | dict | `tracker.py` `update_from_review` | 5 个子字段逐一消费（见下表） |
+| `quality_breakdown` | dict | `pipeline.py` `_write_chapters` + `_execute_revise` | 8 维评分 + 总分打印展示 |
 
 ### 14.2 consistency_checks 子字段消费
 
@@ -963,11 +971,11 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 
 ### 18.3 硬编码字典正确性
 
-> **本节字典内容已迁移至 `docs/parameters.md`**：
-> - `_BANNED_REPLACEMENTS` / `_EMPTY_PHRASES` / `_ABSTRACT_NOUNS` / `_CLICHE_PAIRS` → `parameters.md` 第七章「程序化检查规则」
-> - `_GENRE_STRICTNESS` → `parameters.md` 第五章「审核严格度」
-> - `_FIELD_MEANINGS`（~130 条完整列表）→ `parameters.md` 第九章「tracking_changes.csv 字段映射」
-> - `_TRACKING_FILES` → `parameters.md` 第八章
+> **本节字典内容已迁移至 `docs/parameters_and_changelog.md`**：
+> - `_BANNED_REPLACEMENTS` / `_EMPTY_PHRASES` / `_ABSTRACT_NOUNS` / `_CLICHE_PAIRS` → `parameters_and_changelog.md` 第七章「程序化检查规则」
+> - `_GENRE_STRICTNESS` → `parameters_and_changelog.md` 第五章「审核严格度」
+> - `_FIELD_MEANINGS`（~130 条完整列表）→ `parameters_and_changelog.md` 第九章「tracking_changes.csv 字段映射」
+> - `_TRACKING_FILES` → `parameters_and_changelog.md` 第八章
 >
 > **同步维护要求**（保留在此处）：
 > - 新增 `_BANNED_REPLACEMENTS` → 5 处同步（tracker.py + writer / editor / reviewer / style_advisor prompt）
@@ -1058,23 +1066,29 @@ if sys.platform == "win32":
 
 ---
 
-## 二十、精修阶段链路（Phase 1.5 refining）
+## 二十、精修阶段链路（Phase 1 增量生成 + 精修确认）
 
-> *最后验证：2026-05-21*
+> *最后验证：2026-05-22*
 
 ### 20.1 触发与编排
 
-`directing` 完成后 `state.phase = "refining"`；`_run_pipeline` 进入 `_refine_director_output(state)`。
-全部确认后 `state.phase = "plotting"`，落盘 `world.json` 和 `outline.json` 覆盖 Director 初版。
+`collecting_params` 完成后 `state.phase = "directing"`；`_run_pipeline` 进入 `_run_incremental_directing(state)`。
 
-### 20.2 4 个 block 的字段范围
+**增量生成流程**（2026-05-22 重构）：
+1. `director.run_world()` → 生成世界观 + `planned_cast` + `planned_locations` → 精修确认
+2. 逐个 `director.run_character()` → 生成角色卡（带已确认世界观+已有角色上下文）→ 精修确认
+3. 逐个 `director.run_location()` → 生成地点卡（带已确认世界观+角色上下文）→ 精修确认
+4. `director.run_outline()` → 生成大纲（带全部已确认上下文）→ 精修确认
+5. 清理 `planned_cast`/`planned_locations`，落盘 `world.json`/`outline.json`，`state.phase = "plotting"`
 
-| 方法 | 操作字段 | label | system_prompt（在 `core/refine_prompts.py`） |
-|------|---------|-------|--------------------------------------------|
-| `_refine_world` | `state.world_data` 中除 `characters`/`locations` 外的全部键（name / setting / rules / unique_elements / tone / narrative_perspective / geography / social_structure / factions / history / daily_life 等） | `"世界观"` | `REFINE_WORLD_PROMPT` |
-| `_refine_characters` | `state.world_data["characters"][]` 逐张 | `"核心角色：<name>"` | `REFINE_CHARACTER_PROMPT` |
-| `_refine_locations` | `state.world_data["locations"][]` 逐张 | `"场景地点：<name>"` | `REFINE_LOCATION_PROMPT` |
-| `_refine_outline` | `state.outline` 整块（含 theme / three_act / ending / key_turning_points / subplots / key_conflicts） | `"大纲（主题、三幕、关键转折）"` | `REFINE_OUTLINE_PROMPT` |
+> 旧版 `phase="refining"` 的 state 走 `_refine_director_output()` 旧流程（向后兼容）。
+
+### 20.2 增量生成的上下文构建
+
+| 方法 | 用途 | 包含内容 |
+|------|------|---------|
+| `_build_director_context_json` | Director 生成步骤的上下文 | world（去除 characters/locations/planned_*）+ 已确认 characters + 已确认 locations，完整 JSON 无截断 |
+| `_build_incremental_context` | 精修步骤的上下文 | 故事火花(600字) + 风格 + 已确认世界观(2000字) + 已确认角色完整数据(2000字) + 已确认地点完整数据(2000字) + 大纲(1500字) |
 
 ### 20.3 三选一循环（`_refine_block`）
 
@@ -1085,21 +1099,21 @@ if sys.platform == "win32":
   └─ rewrite  → _llm_refine(current=None) → 完整重生成 → 重新展示
 ```
 
-UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下走）；signal SIGINT 触发 `self._interrupted = True`，各 `_refine_*` 立即 return。
+UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下走）；signal SIGINT 触发 `self._interrupted = True`，各步骤立即 return。
 
 ### 20.4 断点续传（`state.refined_blocks`）
 
 - `NovelState.refined_blocks: list[str]`（dataclass 默认 `[]`）
 - 命名规则：`"world"` / `"outline"` / `f"character:{name}"` / `f"location:{name}"`
 - 每个 block 确认后立即 append 并 `state_mgr.save(state)`
-- 各 `_refine_*` 入口检查 `tag in state.refined_blocks` 跳过
+- 增量生成入口检查 `tag in state.refined_blocks` 跳过已确认的 block
 - 旧 state.json 无此字段时，`StateManager.load` 的 `__dataclass_fields__` 白名单过滤（#43）保证向后兼容，默认值 `[]` 自动注入
 
 ### 20.5 落盘策略
 
 - 每个 block 确认 → 立即 save 到 `novel_state.json`（确保中断不丢进度）
-- 全部 4 类完成 → 重写 `world.json`（拼回 characters / locations）和 `outline.json`
-- world.json 拼接逻辑：`{除 characters/locations 外字段} + characters + locations`（防止 `_refine_world` 写回 state.world_data 时遗漏 list 字段）
+- 全部确认完成 → 清理 `planned_cast`/`planned_locations`，重写 `world.json` 和 `outline.json`
+- world.json 拼接逻辑：`{除 characters/locations 外字段} + characters + locations`
 
 ### 20.6 LLM 契约（`_llm_refine`）
 
@@ -1111,22 +1125,12 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 | 完整重写 (rewrite) | `current=None, rewrite=True, previous=<dict\|list>` | `system_prompt + REFINE_REWRITE_DIRECTIVE` | 上下文 + **之前的版本（请勿沿用此方向）** + "彻底换一种思路重新生成，结构一致但内容方向、风格、设定明显不同" | `0.9` |
 | 兜底初版 | `current=None, rewrite=False`（保留路径，目前未被 `_refine_block` 调用） | `system_prompt` | 上下文 + "请重新生成完整内容" | `0.7` |
 
-- `_refine_block` 外层 rewrite 改传 `rewrite=True, previous=result`（旧版传 `current=None`，无反上下文导致无实质变化，#62 已修复）
-- 使用 `self.llm.chat_json`，依赖 `parse_json` 自动剥离 Markdown 围栏 / 提取首 `{` 到末 `}`
-- 解析失败时 `_llm_refine` 返回 `None`；`_refine_block` 接到 `None` 后 `ui.warn("打磨失败，保留当前版本")` 并继续循环
+### 20.7 向后兼容
 
-### 20.7 上下文裁剪（`_build_refine_context`）
+- 旧 `phase="refining"` + 已有 `world_data`（含 characters/locations）→ 走 `_refine_director_output()` 旧流程
+- 旧 `phase="directing"` + 已有 `world_data`（无 `planned_cast`）→ 检测为旧格式，走旧精修流程
+- 旧 prompt 文件 `director_system.txt` 保留，供旧 `DirectorAgent.run()` 方法使用
 
-- 故事火花：600 字
-- 世界观摘要（非 world block 时）：800 字
-- 大纲摘要（非 outline block 时）：600 字
-- 角色 / 地点 block 还会注入"其他角色/地点名"列表，提示 LLM 保持设定一致
-
-### 20.8 用户体验保留
-
-- `_collect_params` 简化（#60）后用户在参数确认面板看不到"自定义阈值/禁用类别"两步；阈值仍在 `show_param_confirmed` 中展示（仅查看，不可改）
-- 进入 refining phase 后 `ui.banner("精修阶段", ...)` + `ui.hint("[恢复] 已确认 N 个 block")` 告知用户已通过的 block
-
-**检查点**：新增 refining block 时必须：(1) 在 `core/refine_prompts.py` 加 system_prompt；(2) 在 `_refine_director_output` 编排顺序中插入；(3) 在 `state.refined_blocks` 用稳定命名规则（避免与已有 tag 冲突）；(4) 文档同步本表。
+**检查点**：新增 refining block 时必须：(1) 在 `core/refine_prompts.py` 加 system_prompt；(2) 在 `_run_incremental_directing` 编排顺序中插入；(3) 在 `state.refined_blocks` 用稳定命名规则（避免与已有 tag 冲突）；(4) 文档同步本表。
 
 ---
