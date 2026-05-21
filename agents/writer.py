@@ -15,7 +15,7 @@ class WriterAgent(BaseAgent):
         super().__init__(llm, config)
         self.ctx_mgr = ctx_mgr
 
-    def _build_system_prompt(self, words_min: int, words_max: int, style_guide: dict | None = None) -> str:
+    def _build_system_prompt(self, words_min: int, words_max: int, style_guide: dict | None = None, is_rewrite: bool = False) -> str:
         tone = "根据设定风格"
         perspective = "第三人称有限视角"
         if style_guide:
@@ -28,7 +28,15 @@ class WriterAgent(BaseAgent):
         safe_prompt = safe_prompt.replace("{{tone_guidance}}", tone)
         safe_prompt = safe_prompt.replace("{{narrative_perspective}}", perspective)
 
-        return self.apply_style(safe_prompt, style_guide)
+        prompt = self.apply_style(safe_prompt, style_guide)
+        if is_rewrite:
+            prompt += (
+                "\n\n## 重写专项要求\n"
+                "本次是基于审稿意见的修订，请实质性改写被指出问题的段落（不是字面微调或同义替换），"
+                "同时严格保留 strengths 列表中标注的优秀内容。如审稿指出\"对话单调\"，需重新设计对话表达；"
+                "如指出\"节奏拖沓\"，需砍掉冗余段落而不是仅仅压缩描写。"
+            )
+        return prompt
 
     def _resolve_words(self, words_min: int | None, words_max: int | None) -> tuple[int, int]:
         cfg = self.config["novel"]["words_per_chapter"]
@@ -64,18 +72,21 @@ class WriterAgent(BaseAgent):
 
     def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
         words_min, words_max = self._resolve_words(words_min, words_max)
-        system = self._build_system_prompt(words_min, words_max, style_guide)
+        system = self._build_system_prompt(words_min, words_max, style_guide, is_rewrite=True)
 
         # 重写时不重复传入完整 running_context，只传审稿意见和草稿
         # running_context 已在 system prompt 中通过风格指南体现，避免 token 叠加
         user_msg = (
             f"## 审稿意见\n{review_feedback}\n\n"
             f"## 原始草稿\n{draft}\n\n"
-            f"请根据审稿意见修改上述草稿，修复指出的所有问题。保持原有的好内容，只修改有问题的部分。"
+            f"请根据审稿意见修改上述草稿，修复指出的所有问题。保持原有的好内容，只修改有问题的部分。\n\n"
+            f"注意：请实际修复问题，避免只做表面调整而保留同样的问题。"
+            f"如审稿指出\"对话单调\"，请实质性改写对话表达；如指出\"节奏拖沓\"，请砍掉冗余段落。"
         )
 
-        logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')}...")
-        text = self.llm.chat(system, user_msg, temperature=self._temperature())
+        rewrite_temp = min(self._temperature() + 0.15, 0.9)
+        logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')} (temp={rewrite_temp:.2f})...")
+        text = self.llm.chat(system, user_msg, temperature=rewrite_temp)
 
         # Check word count, request continuation if too short
         char_count = len(text)
@@ -88,7 +99,7 @@ class WriterAgent(BaseAgent):
                     {"role": "assistant", "content": text},
                     {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
                 ],
-                temperature=self._temperature(),
+                temperature=rewrite_temp,
                 max_tokens=None,
             )
             text = text + continuation

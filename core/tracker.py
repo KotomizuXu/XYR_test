@@ -7,6 +7,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .state_manager import atomic_write_json
+
 logger = logging.getLogger(__name__)
 
 # Default thresholds for forgotten elements detection
@@ -218,8 +220,7 @@ class Tracker:
         return {}
 
     def _write_json(self, name: str, data: dict) -> None:
-        path = self.tracking_dir / name
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.tracking_dir / name, data)
 
     # --- Config ---
 
@@ -262,15 +263,28 @@ class Tracker:
 
     # --- Init: called after Director completes ---
 
-    def init_tracking(self, world_data: dict, outline: dict, chapter_plans: list[dict]) -> None:
-        self._init_character_state(world_data)
-        self._init_timeline(chapter_plans, world_data)
-        self._init_plot_tracker(outline, chapter_plans)
-        self._init_relationships(world_data)
-        self._init_validation_rules(world_data)
-        self._init_locations(world_data)
-        self._init_config()
-        logger.info("Tracking system initialized")
+    def init_tracking(self, world_data: dict, outline: dict, chapter_plans: list[dict], missing: list[str] | None = None) -> None:
+        """初始化追踪文件。
+        missing=None 时仅初始化磁盘上不存在的文件（保护已有数据）；
+        显式传入列表则只初始化列表中的文件，list 中允许包含 config.json。
+        """
+        init_map = {
+            "character_state.json": lambda: self._init_character_state(world_data),
+            "timeline.json": lambda: self._init_timeline(chapter_plans, world_data),
+            "plot_tracker.json": lambda: self._init_plot_tracker(outline, chapter_plans),
+            "relationships.json": lambda: self._init_relationships(world_data),
+            "validation_rules.json": lambda: self._init_validation_rules(world_data),
+            "locations.json": lambda: self._init_locations(world_data),
+            "config.json": self._init_config,
+        }
+        if missing is None:
+            targets = [f for f in init_map if not self._read_json(f)]
+        else:
+            targets = [f for f in missing if f in init_map]
+
+        for fname in targets:
+            init_map[fname]()
+        logger.info(f"Tracking system initialized: {targets or 'no-op'}")
 
     def _parse_characters(self, world_data: dict) -> tuple[list[dict], list[dict], list[dict]]:
         """Parse characters from world_data, return (all_chars, protagonists, supporting)."""
@@ -861,11 +875,13 @@ class Tracker:
                     "significance": sig,
                 })
 
-        # Append appearance tracking
-        char_state.setdefault("appearanceTracking", []).append({
-            "chapter": chapter_num,
-            "appearances": appearances,
-        })
+        # Append appearance tracking（同章只记一次）
+        appearance_list = char_state.setdefault("appearanceTracking", [])
+        if not any(e.get("chapter") == chapter_num for e in appearance_list):
+            appearance_list.append({
+                "chapter": chapter_num,
+                "appearances": appearances,
+            })
         report["characters_updated"] = updated_chars
 
         # Build bidirectional dynamicRelations for co-occurring characters
@@ -906,18 +922,22 @@ class Tracker:
             act_map = {"第一幕": "开端", "第二幕": "发展", "第三幕": "高潮"}
             plot_tracker["currentState"]["mainPlotStage"] = act_map.get(str(act), str(act))
 
-        # Track major events (high tension chapters)
+        # Track major events (high tension chapters)（同章只记一次）
         tension = chapter_plan.get("tension_level", "")
         if tension == "high" or tension == "高潮":
-            plot_tracker.setdefault("checkpoints", {}).setdefault("majorEvents", []).append({
-                "chapter": chapter_num,
-                "event": title or f"第{chapter_num}章高潮",
-            })
+            major_events = plot_tracker.setdefault("checkpoints", {}).setdefault("majorEvents", [])
+            if not any(e.get("chapter") == chapter_num for e in major_events):
+                major_events.append({
+                    "chapter": chapter_num,
+                    "event": title or f"第{chapter_num}章高潮",
+                })
 
-        # Update currentNode based on chapter title
+        # Update currentNode based on chapter title（completedNodes 去重）
         if title:
             plot_tracker["plotlines"]["main"]["currentNode"] = title
-            plot_tracker["plotlines"]["main"].setdefault("completedNodes", []).append(title)
+            completed = plot_tracker["plotlines"]["main"].setdefault("completedNodes", [])
+            if title not in completed:
+                completed.append(title)
         # Extract subplot progress from plan's active_plotlines
         for line in chapter_plan.get("active_plotlines", []):
             line_str = str(line)
@@ -952,11 +972,13 @@ class Tracker:
         if location_info and loc_data.get("locations"):
             for loc in loc_data["locations"]:
                 if loc.get("name") and loc["name"] in str(location_info):
-                    loc.setdefault("events", []).append({
-                        "chapter": chapter_num,
-                        "event": title,
-                        "characters": updated_chars[:5],
-                    })
+                    loc_events = loc.setdefault("events", [])
+                    if not any(e.get("chapter") == chapter_num for e in loc_events):
+                        loc_events.append({
+                            "chapter": chapter_num,
+                            "event": title,
+                            "characters": updated_chars[:5],
+                        })
             loc_data["lastUpdated"] = now
             self._write_json("locations.json", loc_data)
 

@@ -31,6 +31,10 @@ class ReviewerAgent(BaseAgent):
         result = self.llm.chat_json(
             system, user_msg, temperature=self._temperature()
         )
+        if not isinstance(result, dict):
+            logger.error(f"Reviewer: expected dict from chat_json, got {type(result).__name__}")
+            return {"approved": True, "issues": [], "consistency_checks": {}, "overall_quality": 0,
+                    "strengths": [], "auto_fix_suggestions": [], "tracking_updates": {}}
 
         approved = result.get("approved", False)
         quality = result.get("overall_quality", 0)

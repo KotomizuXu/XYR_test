@@ -1,5 +1,11 @@
 # XYR_test 完整流程图
 
+> 本文档**仅记录系统运行时的流程和数据流向**（用 Mermaid 图表达）。
+> 字段链路细节请查阅 `docs/self_check.md`，参数与硬编码常量请查阅 `docs/parameters.md`，AI 验证协议请查阅 `docs/verify_protocol.md`。
+> **接到需求的执行流程请先读 `docs/workflow.md`**。
+>
+> *最后验证：2026-05-21*
+
 ## 主流程
 
 ```mermaid
@@ -30,7 +36,16 @@ flowchart TD
         P1C[三幕大纲 outline]
     end
 
-    P1 --> |world.json<br/>outline.json| P2
+    P1 --> |world.json<br/>outline.json| P15
+
+    subgraph P15["Phase 1.5: 精修阶段 Refining"]
+        P15A[世界观 Panel<br/>是/调整/重写] --> P15B
+        P15B[逐张角色卡<br/>是/调整/重写] --> P15C
+        P15C[逐张地点卡<br/>是/调整/重写] --> P15D
+        P15D[大纲 Panel<br/>是/调整/重写]
+    end
+
+    P15 --> |refined_blocks ✓<br/>覆盖 world.json/outline.json| P2
 
     subgraph P2["Phase 2: 编剧 PlotAgent"]
         P2A[章节拆分] --> P2B

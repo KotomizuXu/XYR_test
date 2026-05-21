@@ -12,10 +12,6 @@ import logging
 import sys
 from pathlib import Path
 
-import readline
-readline.parse_and_bind("set editing-mode emacs")
-readline.parse_and_bind("bind ^? ed-delete-prev-char")
-
 if sys.version_info < (3, 10):
     print("错误：需要 Python 3.10 或更高版本。")
     print(f"  当前版本：Python {sys.version_info.major}.{sys.version_info.minor}")
@@ -26,6 +22,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.pipeline import NovelPipeline, load_config
 from core.state_manager import StateManager
 from core.llm_client import LLMClient
+from core.name_generator import suggest_novel_names
+from core.prompt_utils import (
+    prompt_single, prompt_multiline, prompt_choice, prompt_yes_no,
+    UserAbort, is_interactive,
+)
+from core import ui
+from core.ui import console
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,47 +48,68 @@ _BRAINDUMP_SECTIONS = [
     ("structure", "叙事结构", "structure"),
 ]
 
-_SYSTEM_PROMPT = """你是一位温和、富有洞察力的文学顾问。你的任务是帮助作者深化他们的故事构思。
-请用中文回复。语气温暖、耐心，像一位理解创作者内心世界的朋友。
-不要替作者做决定，而是通过细腻的提问和精准的映照，帮助他们发现自己真正想表达的东西。"""
+_BRAINDUMP_SYSTEM_BASE = """你是一位资深的故事顾问，帮助作者深化他们的故事构思。
+请用中文回复。"""
+
+_BRAINDUMP_STYLE_GUIDANCE = """
+
+## 目标读者风格
+作者期望的小说风格是：{style}
+
+请用与该风格相匹配的语气和措辞回应：
+- 网文 / 爽文 / 甜文 / 言情：用通俗、轻快、贴近读者的措辞，关注"爽点 / 情感钩子 / 节奏冲突 / 角色魅力"，避免"情感真相 / 深层主题 / 文学弧线"这类拔高的措辞
+- 严肃文学 / 现实主义：可使用文学化措辞，关注主题、隐喻、人物弧光
+- 悬疑 / 推理：聚焦悬念布局、信息差、反转节奏
+- 玄幻 / 仙侠 / 科幻：聚焦设定独特性、世界观规则、力量体系
+
+整体原则：你的措辞和关注点要匹配作者的风格选择，而不是把所有故事都引向文学化方向。"""
+
+_BRAINDUMP_NEUTRAL_TAIL = """
+不要替作者做决定，而是通过提问和映照帮助他们澄清自己想表达的东西。"""
+
+_REWRITE_DIRECTIVE = """
+
+## 重写要求
+用户对上一版不满意，请彻底换一种思路、措辞、角度，与上一版表述明显不同；避免在原方向上做表面调整。"""
 
 
-def _read_multiline_feedback() -> str:
-    """读取多行调整意见，空行结束。"""
-    print("  请告诉我你想调整什么（输入空行结束）：")
-    lines = []
-    while True:
-        try:
-            line = input()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            break
-        if not line.strip() and lines:
-            break
-        lines.append(line)
-    feedback = "\n".join(lines).strip()
-    return feedback if feedback else "yes"
+def _build_braindump_system(style: str | None, is_rewrite: bool = False) -> str:
+    parts = [_BRAINDUMP_SYSTEM_BASE]
+    if style:
+        parts.append(_BRAINDUMP_STYLE_GUIDANCE.format(style=style))
+    parts.append(_BRAINDUMP_NEUTRAL_TAIL)
+    if is_rewrite:
+        parts.append(_REWRITE_DIRECTIVE)
+    return "".join(parts)
 
 
 def _confirm(label: str) -> str:
     """展示选项并等待用户确认。返回 'yes' / 'rewrite' / 用户自定义修改意见。"""
     print(f"\n  这是否符合你内心的故事？")
-    print(f"  1. 是（确认并继续）")
-    print(f"  2. 调整（告诉我哪里需要改，支持多行）")
-    print(f"  3. 重写（换一种方向重新生成）")
     try:
-        ans = input("  > ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
+        choice = prompt_choice(
+            "  请选择：",
+            [
+                ("yes", "是（确认并继续）"),
+                ("adjust", "调整（告诉我哪里需要改，支持多行）"),
+                ("rewrite", "重写（换一种方向重新生成）"),
+            ],
+            default_key="yes",
+        )
+    except UserAbort:
         return "yes"
-    if ans in ("1", ""):
+
+    if choice == "yes":
         return "yes"
-    if ans == "3":
+    if choice == "rewrite":
         return "rewrite"
-    if ans == "2":
-        return _read_multiline_feedback()
-    # 用户直接输入了修改意见（单行快捷方式）
-    return ans
+    # adjust：进入多行输入
+    try:
+        feedback = prompt_multiline("  请告诉我你想调整什么：")
+    except UserAbort:
+        print("\n  已取消调整，保留当前内容")
+        return "yes"
+    return feedback if feedback else "yes"
 
 
 def _braindump_section(llm: LLMClient, section_key: str, section_label: str,
@@ -102,24 +126,33 @@ def _braindump_section(llm: LLMClient, section_key: str, section_label: str,
     context = "\n".join(context_parts)
 
     prompts = {
-        "north_star": "请根据作者的故事灵感，用1-2句话提炼这个故事的「北极星」——它最核心的情感真相。这是整个创作的指南针。只输出北极星内容，不要多余解释。",
-        "core_concept": "请将作者的故事灵感扩展为2-4句的核心概念描述。更具体地展现故事的核心冲突和情感张力，但不要加入太多细节——留给后续创作空间。只输出核心概念内容。",
-        "theme": "请识别这个故事想要探索的深层主题。输出：\n1. 一句话主题陈述\n2. 3个这个故事在追问的关键问题\n只输出主题内容，不要多余解释。",
-        "structure": "请根据故事类型推荐一个叙事结构（如三幕结构、英雄之旅、文学弧线等），并简述它如何适用于这个故事。只输出结构建议，不要多余解释。",
+        "north_star": "请根据作者的故事灵感，用 1-2 句话提炼这个故事**最核心的东西**——可以是核心情感、核心冲突、核心钩子、核心爽点，取决于故事类型。只输出内容，不要多余解释。",
+        "core_concept": "请将作者的故事灵感扩展为 2-4 句的核心概念描述，清晰展现故事的**主线张力**（情感、冲突、悬念或爽感都可以）。不要加入太多细节，留给后续创作空间。只输出内容。",
+        "theme": "请描述这个故事想要呈现的**核心要点**：\n1. 一句话故事定位（讲什么 / 想让读者感受什么）\n2. 3 个故事里需要回答 / 解决 / 满足的关键问题或读者期待\n只输出内容，不要多余解释。",
+        "structure": "请根据故事类型推荐一个**合适的叙事结构**（三幕结构、英雄之旅、文学弧线、网文升级流、单元剧、双线交织等都可以，取决于故事），并简述它如何适用于这个故事。只输出内容，不要多余解释。",
     }
 
-    while True:
-        print(f"\n{'─'*50}")
-        print(f"  正在生成「{section_label}」...")
-        result = llm.chat(
-            _SYSTEM_PROMPT,
-            f"## 上下文\n{context}\n\n## 任务\n{prompts[section_key]}",
-            temperature=0.7,
-        ).strip()
+    prev_result: str | None = None
 
-        print(f"\n  【{section_label}】")
-        for line in result.split("\n"):
-            print(f"  {line}")
+    while True:
+        ui.divider(f"正在生成「{section_label}」", style="dim cyan")
+        if prev_result is None:
+            user_msg = f"## 上下文\n{context}\n\n## 任务\n{prompts[section_key]}"
+            system_msg = _build_braindump_system(style)
+            temperature = 0.7
+        else:
+            user_msg = (
+                f"## 上下文\n{context}\n\n"
+                f"## 之前生成的{section_label}（用户不满意，请勿沿用此方向）\n{prev_result}\n\n"
+                f"## 任务\n{prompts[section_key]}\n\n"
+                f"请彻底换一种角度、措辞、节奏重新生成，与上一版表述明显不同。"
+            )
+            system_msg = _build_braindump_system(style, is_rewrite=True)
+            temperature = 0.9
+
+        result = llm.chat(system_msg, user_msg, temperature=temperature).strip()
+
+        ui.show_braindump_result(section_label, result, modified=(prev_result is not None))
 
         # 确认循环：确认/调整/重写，调整后继续循环直到确认
         while True:
@@ -128,31 +161,24 @@ def _braindump_section(llm: LLMClient, section_key: str, section_label: str,
             if action == "yes":
                 return result
             if action == "rewrite":
-                print("  好的，重新生成...")
+                ui.info("好的，换一种思路重新生成...")
+                prev_result = result  # 记录用于反上下文
                 break  # 跳出内层循环，外层重新生成
 
             # 用户输入了调整意见 → 修改 → 再展示 → 继续内层循环
-            print(f"  收到，根据你的意见调整：{action}")
+            ui.info(f"收到，根据你的意见调整：{action[:60]}{'...' if len(action) > 60 else ''}")
             result = llm.chat(
-                _SYSTEM_PROMPT,
+                _build_braindump_system(style),
                 f"## 上下文\n{context}\n\n## 之前生成的{section_label}\n{result}\n\n## 用户的调整意见\n{action}\n\n请根据用户意见修改{section_label}，只输出修改后的内容。",
                 temperature=0.7,
             ).strip()
 
-            print(f"\n  【{section_label}（修改后）】")
-            for line in result.split("\n"):
-                print(f"  {line}")
+            ui.show_braindump_result(section_label, result, modified=True)
 
 
 def _braindump(idea: str, name: str, style: str | None) -> str:
     """交互式立项问答。返回丰富后的故事灵感文本。"""
-    print(f"\n{'='*50}")
-    print("  立项问答 — 让我们一起找到你故事的核心")
-    print(f"{'='*50}")
-    print(f"\n  原始灵感：{idea}")
-    print(f"  小说名称：{name}")
-    if style:
-        print(f"  风格偏好：{style}")
+    ui.show_braindump_intro(idea, name, style)
 
     config = load_config()
     llm = LLMClient(config)
@@ -166,15 +192,13 @@ def _braindump(idea: str, name: str, style: str | None) -> str:
 
     # 组合为富文本 story_idea
     parts = [f"【原始灵感】{idea}"]
+    summary_pairs = []
     for section_key, section_label, _ in _BRAINDUMP_SECTIONS:
         if section_key in approved:
             parts.append(f"【{section_label}】\n{approved[section_key]}")
+            summary_pairs.append((section_label, approved[section_key]))
 
-    print(f"\n{'='*50}")
-    print("  立项问答完成！以下是你确认的故事核心：")
-    print(f"{'='*50}")
-    for part in parts:
-        print(f"\n{part}")
+    ui.show_braindump_summary(summary_pairs)
 
     return "\n\n".join(parts)
 
@@ -184,36 +208,129 @@ def _braindump(idea: str, name: str, style: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def cmd_new():
-    print("请输入故事灵感（输入空行结束）：")
-    idea_lines = []
-    while True:
-        try:
-            line = input()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            break
-        if not line.strip() and idea_lines:
-            break
-        idea_lines.append(line)
-    idea = "\n".join(idea_lines).strip()
-    if not idea:
-        print("故事灵感不能为空")
-        return
-    name = input("请输入小说名称：").strip()
+_INVALID_NAME_CHARS = set('\\/:*?"<>|')
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_MAX_NAME_LENGTH = 64
+
+
+def _sanitize_novel_name(name: str) -> tuple[bool, str]:
+    """校验小说名是否可作为文件夹名。返回 (是否合法, 错误信息或合法名称)。"""
+    name = name.strip()
     if not name:
-        print("小说名称不能为空")
+        return False, "小说名称不能为空"
+    if len(name) > _MAX_NAME_LENGTH:
+        return False, f"小说名称过长（>{_MAX_NAME_LENGTH} 字符），请使用更短的名字"
+    bad = [c for c in name if c in _INVALID_NAME_CHARS]
+    if bad:
+        return False, f"小说名称包含非法字符：{''.join(set(bad))}（不允许 \\ / : * ? \" < > |）"
+    if name.endswith(".") or name.endswith(" "):
+        return False, "小说名称不能以 '.' 或空格结尾（Windows 兼容性）"
+    base_name = name.split(".", 1)[0].upper()
+    if base_name in _WINDOWS_RESERVED_NAMES:
+        return False, f"「{name}」是 Windows 保留名，请换一个名字"
+    return True, name
+
+
+def _pick_novel_name(idea: str, style: str | None) -> str | None:
+    """通过交互获取小说名。返回 None 表示用户取消。
+
+    流程：先问是否要 AI 起名 → 是则调用 LLM 推 3 候选，循环展示直到用户选定 / 改自定义 / 重生成；
+    否则直接走手输 + validator。
+    """
+    try:
+        use_ai = prompt_yes_no("需要 AI 根据故事火花帮你起名吗？", default=True)
+    except UserAbort:
+        return None
+
+    if not use_ai:
+        try:
+            return prompt_single("请输入小说名称：", validator=_sanitize_novel_name)
+        except UserAbort:
+            return None
+
+    config = load_config()
+    llm = LLMClient(config)
+
+    while True:
+        with console.status("[cyan]AI 正在为你起名...[/cyan]", spinner="dots"):
+            candidates = suggest_novel_names(llm, idea, style=style, n=3)
+
+        ui.show_name_candidates(candidates)
+
+        # 构造选项：N 个候选 + 重新生成 + 自己输入
+        options: list[tuple[str, str]] = []
+        for i, c in enumerate(candidates, 1):
+            options.append((f"cand_{i}", f"使用「{c}」"))
+        options.append(("regen", "再生成一组候选"))
+        options.append(("custom", "自己输入"))
+
+        try:
+            choice = prompt_choice("请选择：", options, default_key="cand_1" if candidates else "custom")
+        except UserAbort:
+            return None
+
+        if choice == "regen":
+            continue
+        if choice == "custom":
+            try:
+                return prompt_single("请输入小说名称：", validator=_sanitize_novel_name)
+            except UserAbort:
+                return None
+
+        # cand_N → 取对应候选 + 校验
+        idx = int(choice.split("_")[1]) - 1
+        picked = candidates[idx]
+        ok, msg = _sanitize_novel_name(picked)
+        if ok:
+            return msg if isinstance(msg, str) and msg else picked
+        # 候选名校验失败（极少见，如长度刚好超），提示让用户改
+        ui.warn(f"AI 推荐的「{picked}」校验失败：{msg}。请手动调整或选其他。")
+        try:
+            return prompt_single("请输入小说名称：", default=picked, validator=_sanitize_novel_name)
+        except UserAbort:
+            return None
+
+
+def cmd_new():
+    if not is_interactive():
+        ui.error("new 命令需要交互式终端")
         return
-    style = input("请输入小说风格（如：网文爽文、传统文学、悬疑推理，留空使用默认风格）：").strip() or None
+
+    ui.banner("Novel Agent", "AI 多角色协作小说写作框架")
+
+    try:
+        # 1. 故事火花（多行，先收，让 AI 起名时有依据）
+        idea = prompt_multiline("请输入故事灵感（多行可编辑，Ctrl+D 提交）：")
+        if not idea:
+            ui.warn("故事灵感不能为空")
+            return
+
+        # 2. 小说名称（支持 AI 起名）
+        name = _pick_novel_name(idea, style=None)
+        if not name:
+            ui.warn("已取消创建")
+            return
+
+        # 3. 风格（单行，可留空）
+        style = prompt_single(
+            "请输入小说风格（如：网文爽文、传统文学、悬疑推理，留空使用默认风格）：",
+        ) or None
+    except UserAbort:
+        ui.warn("已取消创建")
+        return
 
     try:
         enriched_idea = _braindump(idea, name, style)
-    except KeyboardInterrupt:
-        print("\n已取消立项问答")
+    except UserAbort:
+        ui.warn("已取消立项问答")
         return
     except Exception as e:
-        print(f"\n立项问答出错：{e}")
-        print("你可以重试（python3 main.py new）")
+        ui.error(f"立项问答出错：{e}")
+        ui.hint("你可以重试（python main.py new）")
         return
 
     pipeline = NovelPipeline()
@@ -224,14 +341,26 @@ def cmd_continue():
     mgr = StateManager()
     novels = mgr.list_novels()
     if not novels:
-        print("暂无进行中的小说")
+        ui.warn("暂无进行中的小说")
         return
-    print("进行中的小说：")
+
+    ui.banner("继续创作", "选择要恢复的小说项目")
+
+    # 构建菜单选项
+    options = []
     for n in novels:
         state = mgr.load(n)
         if state:
-            print(f"  - {n} ({state.phase}, {state.current_chapter}/{state.total_chapters}章)")
-    name = input("\n请输入要继续的小说名称：").strip()
+            label = f"{n}  ({state.phase}, {state.current_chapter}/{state.total_chapters}章)"
+        else:
+            label = n
+        options.append((n, label))
+
+    try:
+        name = prompt_choice("请选择要继续的小说：", options)
+    except UserAbort:
+        ui.warn("已取消")
+        return
     if not name:
         return
 
@@ -243,66 +372,79 @@ def cmd_status():
     mgr = StateManager()
     novels = mgr.list_novels()
     if not novels:
-        print("暂无小说项目")
+        ui.warn("暂无小说项目")
         return
 
-    print(f"\n{'='*50}")
-    print("小说项目列表")
-    print(f"{'='*50}")
+    phase_names = {
+        "styling": "风格分析",
+        "collecting_params": "参数确认",
+        "directing": "构建世界观",
+        "refining": "精修世界观",
+        "plotting": "规划剧情",
+        "writing": "撰写中",
+        "editing": "编辑润色",
+        "complete": "已完成",
+    }
+    rows = []
     for name in novels:
         state = mgr.load(name)
-        if state:
-            phase_names = {
-                "styling": "风格分析",
-                "collecting_params": "参数确认",
-                "directing": "构建世界观",
-                "plotting": "规划剧情",
-                "writing": "撰写中",
-                "editing": "编辑润色",
-                "complete": "已完成",
-            }
-            phase_str = phase_names.get(state.phase, state.phase)
-            print(f"\n《{name}》")
-            print(f"  阶段：{phase_str}")
-            print(f"  进度：{min(state.current_chapter, state.total_chapters)}/{state.total_chapters}章")
-            idea_preview = state.story_idea[:50]
-            print(f"  灵感：{idea_preview}{'...' if len(state.story_idea) > 50 else ''}")
-    print()
+        if not state:
+            continue
+        idea_preview = state.story_idea[:40] + ("..." if len(state.story_idea) > 40 else "")
+        rows.append({
+            "name": name,
+            "phase": phase_names.get(state.phase, state.phase),
+            "current": min(state.current_chapter, state.total_chapters),
+            "total": state.total_chapters,
+            "idea_preview": idea_preview,
+        })
+    ui.show_novel_list(rows)
 
 
 def cmd_revise():
     mgr = StateManager()
     novels = mgr.list_novels()
     if not novels:
-        print("暂无小说项目")
+        ui.warn("暂无小说项目")
         return
-    print("已有小说：")
+
+    ui.banner("修订章节", "选择一本已完成创作的小说")
+
+    options = []
     for n in novels:
         state = mgr.load(n)
-        if state:
-            print(f"  - {n} ({state.phase})")
-    name = input("\n请输入小说名称：").strip()
-    if not name:
+        label = f"{n} ({state.phase})" if state else n
+        options.append((n, label))
+
+    try:
+        name = prompt_choice("请选择要修订的小说：", options)
+    except UserAbort:
+        ui.warn("已取消")
         return
 
     state = mgr.load(name)
     if not state:
-        print(f"未找到小说《{name}》")
+        ui.error(f"未找到小说《{name}》")
         return
 
-    print(f"\n《{name}》已完成章节：\n")
-    has_chapters = False
+    # 列出已完成章节
+    chapter_options = []
     for ch in state.chapters:
         path = Path(ch.edited_path) if ch.edited_path else (Path(ch.draft_path) if ch.draft_path else None)
         if path and path.exists():
             text = path.read_text(encoding="utf-8")
-            print(f"  第{ch.chapter_number}章：「{ch.title}」({len(text)}字)")
-            has_chapters = True
-    if not has_chapters:
-        print("  暂无已完成章节")
+            chapter_options.append((str(ch.chapter_number), f"第{ch.chapter_number}章：「{ch.title}」({len(text)}字)"))
+
+    if not chapter_options:
+        ui.warn("暂无已完成章节")
         return
-    chapter_str = input("\n请输入要修订的章节编号：").strip()
-    if not chapter_str or not chapter_str.isdigit():
+
+    try:
+        chapter_str = prompt_choice(f"《{name}》请选择要修订的章节：", chapter_options)
+    except UserAbort:
+        ui.warn("已取消")
+        return
+    if not chapter_str:
         return
     chapter = int(chapter_str)
 

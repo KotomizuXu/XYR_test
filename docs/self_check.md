@@ -1,9 +1,22 @@
 # 数据链路自检清单
 
-本文档用于代码变更后的完整性自检。覆盖三个维度：
+本文档是**字段链路参考手册**，记录每个 AI 生成字段从「生成 → 存储 → 格式化 → 消费」的完整流转路径。
+当 AI 执行 `docs/verify_protocol.md` 中的验证项时，需要查阅此文档了解链路细节。
+
+> **接到需求时不要从这里开始读** —— 先读 `docs/workflow.md`（流程总纲）。本文件是事实底稿，不是执行流程。
+
+**与其他文档的分工**：
+- 参数值/硬编码常量/CSV 字段映射 → `docs/parameters.md`（权威来源）
+- 流程图/数据流向图 → `docs/flowchart.md`
+- AI 验证协议 → `docs/verify_protocol.md`
+- 字段链路细节（生成→消费）→ 本文档
+
+**覆盖范围**：
 1. **AI 生成数据链路**：追踪字段从"AI 生成 → Pipeline 存储 → 格式化器提取 → 下游 Agent 消费"的全链路
 2. **用户输入校验**：每个用户输入点的校验、防御和安全处理
 3. **硬编码内容审计**：prompt 模板、常量字典、配置映射的正确性和一致性
+
+> **维护规则**：每章末尾标注「最后验证时间」。每次代码变更并执行 verify_protocol 后，AI 必须更新对应章节的"最后验证时间"。
 
 ---
 
@@ -12,10 +25,13 @@
 1. 修改了 Agent prompt、pipeline 存储、context_manager 格式化、tracker 数据流中的任何一环后，按对应章节逐项检查
 2. 每项检查包含：字段名 → 生成位置 → 存储位置 → 格式化位置 → 消费位置
 3. **任何一环断裂（缺定义、缺存储、缺提取、缺注入），即为一类 bug**
+4. **本文档与代码不一致时，以代码为准**——读者应当把本文档当成"路标"而非"事实"
 
 ---
 
 ## 一、Director 输出字段链路
+
+> *最后验证：2026-05-21*
 
 Director 输出 JSON 包含 5 个顶级 key：`world`、`characters`、`locations`、`outline`、`style`。
 
@@ -85,6 +101,8 @@ Director 输出 JSON 包含 5 个顶级 key：`world`、`characters`、`location
 
 ## 二、Plotter 输出字段链路
 
+> *最后验证：2026-05-21*
+
 Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 
 ### 2.1 章节计划字段
@@ -117,6 +135,8 @@ Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 ---
 
 ## 三、Tracker 数据链路
+
+> *最后验证：2026-05-21*
 
 ### 3.1 追踪文件初始化
 
@@ -193,6 +213,8 @@ relationships.json, validation_rules.json, locations.json
 
 ## 四、Context 构建链路
 
+> *最后验证：2026-05-21*
+
 ### 4.1 build_running_context 组装
 
 ```
@@ -221,39 +243,21 @@ FULL_CONTEXT_TEMPLATE:
 
 ## 五、Style Guide 分发链路
 
-`STYLE_FIELDS` 定义每个 Agent 收到 style_guide 的哪些字段。
+> *最后验证：2026-05-21*
 
-| Agent | 收到的字段 |
-|-------|----------|
-| director | tone, pacing, plot, character, worldbuilding, setting, style_presets |
-| plotter | tone, pacing, plot, character, worldbuilding, setting, style_presets |
-| writer | tone, pacing, plot, character, worldbuilding, setting, style_presets, **requirements** |
-| reviewer | tone, character, worldbuilding, review, requirements, setting |
-| editor | tone, pacing, character, editing, style_presets, requirements |
-| critic | character, worldbuilding, setting, requirements |
-
-**检查点**：
-- `_agent_name()` 返回值是否在 `STYLE_FIELDS` 中有对应条目
-- PlotAgent 的 `_agent_name()` 应返回 `"plotter"`（不是 `"plot"`，由 `_AGENT_CONFIG_KEYS` 映射）
-
-### 5.1 Style Guide 完整行为
-
-Style Guide 由 StyleAdvisorAgent 生成，影响两个维度：
-
-**维度 1：Prompt 内容过滤**（`apply_style` 方法）
-- 每个 Agent 只收到 `STYLE_FIELDS` 中定义的字段子集
-- `apply_style` 在 `base.py` 中实现，从完整 `style_guide` 中提取对应字段
-
-**维度 2：温度参数覆盖**（`_apply_style_temperatures`）
-- `style_guide.agent_temperatures` 映射 Agent 名 → 推荐温度
-- 在 `_run_pipeline` 开头调用，覆盖 `config.yaml` 中的默认温度
-- 映射键名：`style_advisor/director/plotter/writer/reviewer/editor/critic`
-
-**检查点**：新增 Agent 时，必须同时添加到 `STYLE_FIELDS` 和 `agent_temperatures` 映射。
+> **本节内容已迁移至 `docs/parameters.md` 第四章「风格指南」+「STYLE_FIELDS 分发过滤」表格**。
+> 那里是 STYLE_FIELDS 字段分发的权威来源，含每个 Agent 收到的字段列表。
+>
+> 检查点（保留在此处）：
+> - `_agent_name()` 返回值是否在 `STYLE_FIELDS` 中有对应条目
+> - PlotAgent 的 `_agent_name()` 应返回 `"plotter"`（由 `_AGENT_CONFIG_KEYS` 映射，而不是 `"plot"`）
+> - 修改 STYLE_FIELDS 后，需同步更新 parameters.md 第四章
 
 ---
 
 ## 六、Writer 特殊链路
+
+> *最后验证：2026-05-21*
 
 ### 6.1 叙事视角
 
@@ -278,16 +282,24 @@ writer.run → chat() → 检查 len(text) < words_min * 0.9 → chat_with_histo
 ### 6.3 重写续写
 
 ```
-writer.rewrite → chat() → 检查 len(text) < words_min * 0.9 → chat_with_history 续写
+writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=min(base+0.15, 0.9))
+              → 检查 len(text) < words_min * 0.9 → chat_with_history 续写（同 rewrite_temp）
 ```
 
 **说明**：`rewrite` 方法同样具备字数不足续写逻辑，与 `run` 方法一致。重写时因上下文精简（只传审稿意见+草稿，不重复传 running_context），续写时可能偏离原文风格。
 
-**检查点**：重写后的续写质量是否受精简上下文影响。
+**rewrite 三重组合（#62 修复）**：
+1. **System 增强**：`_build_system_prompt(is_rewrite=True)` 在 system prompt 尾部追加"## 重写专项要求"段，强调实质性改写被指出问题的段落而非字面微调，并严格保留 strengths 标注的优秀内容
+2. **User msg 增强**：尾部追加"请实际修复问题，避免只做表面调整"示例（如"对话单调"需重新设计对话表达）
+3. **升温**：`rewrite_temp = min(self._temperature() + 0.15, 0.9)`，比初稿温度上调 0.15（封顶 0.9，防止过度发散导致风格漂移）
+
+**检查点**：重写后的续写质量是否受精简上下文影响；rewrite 温度上限 0.9 是硬编码在 `agents/writer.py` `rewrite()` 中。
 
 ---
 
 ## 七、程序化检查链路
+
+> *最后验证：2026-05-21*
 
 ### 7.1 写作循环中的检查（pipeline `_write_chapters`）
 
@@ -307,6 +319,8 @@ writer.rewrite → chat() → 检查 len(text) < words_min * 0.9 → chat_with_h
 
 ## 八、修订流程数据链路
 
+> *最后验证：2026-05-21*
+
 ```
 revise_chapter → critic.run → _select_idea → _execute_revise
   → writer.rewrite → reviewer.run → [retry once] → editor.run
@@ -324,6 +338,8 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 ---
 
 ## 九、变更自检操作步骤
+
+> *最后验证：2026-05-21*
 
 ### 步骤 1：Prompt 变更检查
 
@@ -426,6 +442,7 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 修复了 bug？             → parameters.md (bug fix 记录) + README.md (变更日志)
 新增了用户输入点？        → self_check.md (第十七章)
 新增了硬编码字典/常量？   → self_check.md (第十八章) + parameters.md
+改了 ui.py / name_generator.py？ → self_check.md (第十九章) + parameters.md (第八章硬编码) + README.md
 ```
 
 #### 自检文档自评
@@ -448,6 +465,8 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 
 ## 十、LLM 输出健壮性
 
+> *最后验证：2026-05-21*
+
 AI 不一定严格按 schema 输出，每个 Agent 的 LLM 调用点都需要防御性处理。
 
 ### 10.1 JSON 返回类型校验
@@ -455,9 +474,9 @@ AI 不一定严格按 schema 输出，每个 Agent 的 LLM 调用点都需要防
 | Agent | 调用方法 | 期望类型 | 当前防护 |
 |-------|---------|---------|---------|
 | StyleAdvisor | `chat_json` | `dict` | ✅ `if not isinstance(result, dict)` → return `{}` |
-| Director | `chat_json` | `dict` | ❌ 无类型检查，返回 list 会崩溃 |
+| Director | `chat_json` | `dict` | ✅ `if not isinstance(result, dict)` → return `{}`（#50） |
 | Plotter | `chat_json` | `list[dict]` | ✅ `if isinstance(result, dict) and "chapters" in result` 解包；`if not isinstance(result, list)` raise |
-| Reviewer | `chat_json` | `dict` | ❌ 无类型检查 |
+| Reviewer | `chat_json` | `dict` | ✅ `if not isinstance(result, dict)` → 返回安全默认 dict（含 approved/issues/consistency_checks 等字段）（#50） |
 | Critic | `chat_json` | `dict` | ✅ `if isinstance(result, dict)` 检查 |
 
 **检查点**：新增 Agent 使用 `chat_json` 时，必须验证返回类型。
@@ -505,6 +524,8 @@ parse_json 处理链：
 
 ## 十一、状态持久化完整性
 
+> *最后验证：2026-05-21*
+
 ### 11.1 NovelState save/load 往返
 
 `NovelState` 是 dataclass，通过 `asdict()` 序列化、`NovelState(**data)` 反序列化。
@@ -515,11 +536,12 @@ parse_json 处理链：
 |------|------|------|
 | 新增字段（有默认值） | ✅ 旧 state 无该字段，`__init__` 使用默认值 | 安全 |
 | 新增字段（无默认值） | ❌ `NovelState(**data)` 缺少参数 → TypeError | 必须加默认值 |
-| 删除字段 | ✅ data 中多余字段会被 `**data` 吞掉 | 安全（但 `ChapterState` 同理） |
+| 删除字段 | ❌ `NovelState(**data)` 收到未知参数 → TypeError | 必须在 `StateManager.load` 中过滤掉旧字段 |
 | 重命名字段 | ❌ 旧 state 中旧名字段被忽略，新名字段取默认值 | 数据丢失 |
 
 **检查点**：修改 `NovelState` 或 `ChapterState` 的字段时：
 - 新增字段必须给默认值
+- 删除字段需要在 `StateManager.load` 中过滤（已修复：load 使用 `__dataclass_fields__` 白名单过滤）
 - 重命名字段需要迁移逻辑（在 `StateManager.load` 中处理）
 
 ### 11.2 原子写入
@@ -551,13 +573,15 @@ tmp_path.replace(state_path)  # 原子 rename
 
 ## 十二、Pipeline 状态机
 
+> *最后验证：2026-05-21*
+
 ### 12.1 阶段转换图
 
 ```
-styling → collecting_params → directing → plotting → writing → editing → complete
-                                                        ↑
-                                                    Phase 2.5
-                                                   (追踪初始化)
+styling → collecting_params → directing → refining → plotting → writing → editing → complete
+                                              ↑                     ↑
+                                         Phase 1.5            Phase 2.5
+                                       (用户分块打磨)         (追踪初始化)
 ```
 
 每个 phase 用 `if state.phase == "xxx"` 守卫，顺序排列在 `_run_pipeline` 中。通过后设置 `state.phase = "next_phase"` 并 save。
@@ -571,6 +595,7 @@ styling → collecting_params → directing → plotting → writing → editing
 | styling | ✅ | 重新生成 style_guide |
 | collecting_params | ✅ | 重新收集参数 |
 | directing | ✅ | 重新生成世界观 |
+| refining | ✅ | 已确认的 block 通过 `state.refined_blocks` 跳过，未确认的从断点续上 |
 | plotting | ✅ | 重新生成章节计划 |
 | writing（从中间章节） | ✅ | `current_chapter` 索引从 i 继续 |
 | editing（从中间章节） | ✅ | 同上 |
@@ -585,70 +610,65 @@ Phase 2.5 的初始化检查：
 missing = [f for f in Tracker._TRACKING_FILES if not tracker._read_json(f)]
 config_missing = not tracker._read_json("config.json")
 if missing or config_missing:
-    tracker.init_tracking(...)
+    targets = list(missing) + (["config.json"] if config_missing else [])
+    tracker.init_tracking(state.world_data, state.outline, state.chapter_plans, missing=targets)
     tracker._apply_validation_level(...)  # 根据 genre strictness 设置校验严格度
 ```
 
 **检查点**：
 - 已存在的文件不会被覆盖（幂等）
-- 如果部分文件存在、部分不存在，只初始化缺失的？**不是**——当前 `init_tracking` 会重写全部文件。需要确认 init_tracking 是否有覆盖保护。
+- ✅ **已修复 #49**：`init_tracking(missing=None)` 时仅初始化磁盘上不存在的文件；pipeline 显式传入 missing 列表，确保从 writing 中段恢复且部分文件缺失时已存在文件不被覆盖
 - `_apply_validation_level` 根据 `_GENRE_STRICTNESS` 映射设置 `config.json` 的 `strictness` 和 `disabled_checks`
 
 ### 12.4 写作循环中断恢复
 
 ```python
 for i in range(state.current_chapter, state.total_chapters):
+    ch = state.chapters[i]
+    # Stage 1: Writer draft（ch.stage in {drafted, reviewed, tracked} 且草稿文件存在 → 跳过）
     ...
-    state.current_chapter = i + 1  # 每章写完后更新
+    ch.stage = "drafted"; self.state_mgr.save(state)
+    # Stage 2: Review loop（ch.stage in {reviewed, tracked} → 跳过，复用 review_notes）
+    ...
+    ch.stage = "reviewed"; self.state_mgr.save(state)
+    # Stage 3: Summary + update_tracking + L3 + log_changes_csv（ch.stage == "tracked" → 跳过）
+    ...
+    ch.stage = "tracked"; self.state_mgr.save(state)
+
+    state.current_chapter = i + 1
     state.phase = "writing"
-    self.state_mgr.save(state)      # 每章保存
+    self.state_mgr.save(state)
 ```
 
-**检查点**：如果中断发生在 `update_tracking` 之后、`save` 之前——追踪数据已更新但 state 未保存。恢复时会重写该章，但追踪数据是上一章的状态（被 `_read_json` 重读），不会导致不一致。
+**章内 stage 状态机**（`ChapterState.stage`）：
+
+```
+pending → drafted → reviewed → tracked
+            ↑          ↑          ↑
+         writer 完成 审核循环结束 update_tracking 完成
+```
+
+每段完成后保存 state（包含 stage 字段），保证中断恢复时可以从最细粒度跳过已完成段。
+
+**检查点**：如果中断发生在 `update_tracking` 之后、`ch.stage = "tracked"` 之前——下次恢复会进入 Stage 3 重跑 `update_tracking`。`tracker.update_tracking` 已对 `appearanceTracking / majorEvents / completedNodes / locations.events` 加入"同章不重复追加"检查（`any(e.get("chapter") == chapter_num for e in lst)`），重跑幂等无副作用。
 
 ---
 
 ## 十三、Config 消费审计
 
-### 13.1 config.yaml 消费清单
+> *最后验证：2026-05-21*
 
-| 配置路径 | 读取位置 | 状态 |
-|---------|---------|------|
-| `api.base_url` | `llm_client.py` __init__ | ✅ 使用 |
-| `api.auth_token_env` | `llm_client.py` __init__ | ✅ 使用 |
-| `api.model` | `llm_client.py` __init__ | ✅ 使用 |
-| `api.max_tokens` | `llm_client.py` __init__ → `self.default_max_tokens` | ✅ 使用 |
-| `api.temperature` | `llm_client.py` __init__ → `self.default_temperature` | ✅ 使用（被 Agent 温度覆盖后作 fallback） |
-| `api.timeout` | `llm_client.py` __init__ → `anthropic.Anthropic(timeout=)` | ✅ 使用 |
-| `novel.default_chapters` | `pipeline.py` `_collect_params` → `default_chapters` | ✅ 使用 |
-| `novel.words_per_chapter.min` | `pipeline.py` `_get_words_range` → `cfg["min"]` | ✅ 使用 |
-| `novel.words_per_chapter.max` | `pipeline.py` `_get_words_range` → `cfg["max"]` | ✅ 使用 |
-| `novel.review_max_retries` | `pipeline.py` `_write_chapters` → `max_retries` | ✅ 使用 |
-| `novel.summary_max_length` | `context_manager.py` __init__ → `self.max_summary_length` | ✅ 使用 |
-| `agents.*.temperature` | `base.py` `_temperature()` → `_agent_config().get("temperature")` | ✅ 使用（被 style_temperatures 覆盖后作 fallback） |
-
-**结论**：config.yaml 中所有字段都被消费，无死配置。
-
-### 13.2 硬编码常量审计
-
-以下值硬编码在代码中，未来可能需要提取到 config：
-
-| 常量 | 值 | 位置 | 是否应提取 |
-|------|-----|------|-----------|
-| `MAX_CONTEXT_CHARS` | 60000 | context_manager.py | 可选（高级用户可能想调） |
-| `BATCH_SIZE` | 5 | plotter.py | ❌（算法参数） |
-| `max_retries` | 3 | llm_client.py | 可选 |
-| `max_continuations` | 3 | llm_client.py | 可选 |
-| 续写阈值 | 0.9 | writer.py | ❌（固定策略） |
-| 相邻章节参考字数 | 800 | pipeline.py `_get_adjacent_text` | 可选 |
-| 世界观数据截断 | 2000 | reviewer.py | 可选 |
-| Critic 章节截断 | 8000 | critic.py | 可选 |
-| `_BANNED_REPLACEMENTS` | ~45 词 | tracker.py | ❌（维护在代码中更方便） |
-| L3 分析频率 | 每 5 章 | pipeline.py `ch_num % 5 == 0` | 可选 |
+> **本节内容已迁移至 `docs/parameters.md`**：
+> - config.yaml 字段消费清单 → `parameters.md` 第一章 + 第二章 + 第三章
+> - 硬编码常量审计 → `parameters.md` 第八章「LLM 客户端与 pipeline 行为参数」
+>
+> 修改 config.yaml 或硬编码常量后，需同步更新 parameters.md 对应章节。
 
 ---
 
 ## 十四、Reviewer 输出全量消费
+
+> *最后验证：2026-05-21*
 
 Reviewer 返回一个完整 JSON，包含 7 个顶级字段。每个字段都必须被正确消费。
 
@@ -692,7 +712,7 @@ for fix in review.get("auto_fix_suggestions", []):
 - `replace` 使用 `count=1` 避免全局替换误伤
 - 修复类型包括：`character_name`（角色名修正）、`address`（称呼修正）、`timeline`（时间标记）、`physical_trait`（外貌特征）
 
-**注意**：`auto_fix_suggestions` 不进入 tracker，仅修改文本。
+**注意**：`auto_fix_suggestions` 同时进入 tracker——`_consume_review` 会将其写入 `validation_rules.json` 的 `common_errors` 中，供后续章节 `auto_fix` 参考。即：文本修改 + 规则记录双路消费。
 
 ### 14.3 tracking_updates 子字段消费
 
@@ -706,13 +726,15 @@ for fix in review.get("auto_fix_suggestions", []):
 
 ### 14.4 双重评分体系
 
-Reviewer prompt 要求输出 `consistency_score`（0-100），但 pipeline 中被 `tracker.calculate_consistency_score(review)` 覆盖：
+Reviewer prompt 要求输出 `consistency_score`（0-100），但 pipeline 中**仅在审核通过时**被 `tracker.calculate_consistency_score(review)` 覆盖：
 
 ```python
-# pipeline.py _write_chapters
+# pipeline.py _write_chapters（仅在 review.get("approved") 为 True 时执行）
 calc_score = tracker.calculate_consistency_score(review)
 review["consistency_score"] = calc_score  # 覆盖 reviewer 原始分数
 ```
+
+审核未通过时，`consistency_score` 保留 reviewer 原始值。
 
 `calculate_consistency_score` 的计算规则：基于 `issues` 的 severity 加权（major -15, warning -5, note -2）。
 
@@ -721,6 +743,8 @@ review["consistency_score"] = calc_score  # 覆盖 reviewer 原始分数
 ---
 
 ## 十五、边界场景
+
+> *最后验证：2026-05-21*
 
 ### 15.1 极端章节数
 
@@ -807,6 +831,8 @@ if groups.get("inactive") or groups.get("deceased"): ...
 
 ## 十六、常见故障模式速查
 
+> *最后验证：2026-05-21*
+
 | 故障现象 | 可能原因 | 排查位置 |
 |---------|---------|---------|
 | 追踪文件全空 / 部分缺失 | Phase 2.5 仅检查了部分文件 | pipeline.py Phase 2.5 的 `missing` 列表 |
@@ -834,69 +860,76 @@ if groups.get("inactive") or groups.get("deceased"): ...
 
 ## 十七、用户输入校验清单
 
+> *最后验证：2026-05-21（含 prompt_utils 跨平台输入封装重构）*
+
 ### 17.1 输入点全览与校验现状
+
+> 自 2026-05-21 起所有交互输入统一改用 `core/prompt_utils.py`（基于 prompt_toolkit），
+> 跨平台支持 Win/Mac/Linux，原生支持退格、方向键、Home/End、Alt+Backspace 删词、多行光标自由移动，
+> 不再依赖系统 readline（Windows 无该模块）。Ctrl+C 抛 `UserAbort` 而非 KeyboardInterrupt，便于上层精准捕获。
 
 | 输入点 | 位置 | 校验现状 | 风险 |
 |--------|------|---------|------|
-| 故事灵感 `idea` | main.py `cmd_new` | ✅ 非空检查 | 特殊字符 / 超长文本无限制 |
-| 小说名称 `name` | main.py `cmd_new` | ✅ 非空检查 | **路径注入**（含 `/\:*?"<>|` 会创建非法目录名） |
-| 风格描述 `style` | main.py `cmd_new` | ✅ 可选，None 兜底 | 安全 |
-| Braindump 各节反馈 | main.py `_braindump_section` | ✅ yes/rewrite/自定义三路 | 安全 |
-| 总章数 | pipeline.py `_collect_params` | ✅ `_read_int` 强制 int | ❌ 可输入 0 或负数 |
-| 每章最少字数 | pipeline.py `_collect_params` | ✅ `_read_int` 强制 int | ❌ 可输入 0 |
-| 每章最多字数 | pipeline.py `_collect_params` | ✅ `_read_int` 强制 int | ❌ max < min 无检查 |
-| 遗忘阈值（3 个） | pipeline.py `_collect_params` | ✅ 逗号分隔 + int 转换 | ❌ 格式错误时静默使用默认值 |
-| 禁用检查类别 | pipeline.py `_collect_params` | ✅ 逗号分隔 + strip | ❌ 输入不存在的类别名会写入 config 但无实际效果（无害但不提示） |
-| 退休元素选择 | pipeline.py `_handle_retire` | ✅ isdigit + 范围检查 | 安全 |
-| 修订意见 | pipeline.py `_collect_user_feedback` | ✅ 空值返回 → 提前退出 | 安全 |
-| 修订思路选择 | pipeline.py `_select_idea` | ✅ isdigit + 范围检查 + 默认回退 | 安全 |
-| 修订确认 y/n | pipeline.py `_execute_revise` | ✅ 非 y 则放弃 | 安全 |
-| 继续创作小说名 | main.py `cmd_continue` | ✅ 非空后交给 `resume_novel` | 安全 |
-| 修订章节编号 | main.py `cmd_revise` | ✅ isdigit 检查 | 安全 |
-| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ 仅 "q" 触发退出 | 安全 |
+| 故事灵感 `idea` | main.py `cmd_new` | ✅ `prompt_multiline` 多行 + 非空检查 + UserAbort | 已修复（原跨行光标错乱、无法删除字符） |
+| 小说名称 `name` | main.py `cmd_new` → `_pick_novel_name` | ✅ AI 起名（`suggest_novel_names` 3 候选 / 再生成 / 自输）+ `_sanitize_novel_name` validator；输入顺序：火花 → 名字 → 风格 | 已修复（#48 / #57） |
+| 风格描述 `style` | main.py `cmd_new` | ✅ `prompt_single`，可留空 → None | 安全 |
+| Braindump 各节反馈 | main.py `_braindump_section` | ✅ `prompt_choice` 三选一 + adjust 时进入 `prompt_multiline` | 安全 |
+| 总章数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=1)` 范围校验 | 已修复（原可输 0） |
+| 每章最少字数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=500)` | 已修复（原无下限） |
+| 每章最多字数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=words_min)` | 已修复（max<min 无检查） |
+| ~~遗忘阈值（3 个）~~ | ~~pipeline.py `_collect_params`~~ | **已移除**（2026-05-21 #60）：AI 推荐值默认采纳，不再让用户输入；`show_param_confirmed` 仍展示 | — |
+| ~~禁用检查类别~~ | ~~pipeline.py `_collect_params`~~ | **已移除**（2026-05-21 #60）：`config["disabled_checks"]` 保持空列表（全部启用） | — |
+| 精修阶段三选一 | pipeline.py `_confirm_refine`（refining phase） | ✅ `prompt_choice("yes/adjust/rewrite")`；adjust 后进入 `prompt_multiline`；UserAbort 视为 yes 继续 | 安全 |
+| 精修阶段调整意见 | pipeline.py `_confirm_refine` → adjust 分支 | ✅ `prompt_multiline`，空字符串视为 yes | 安全 |
+| 退休元素选择 | pipeline.py `_handle_retire` | ✅ `prompt_single` + isdigit + 范围检查 | 安全 |
+| 修订意见 | pipeline.py `_collect_user_feedback` | ✅ `prompt_multiline` Ctrl+D 提交 | 已修复（原 END 终止符不直观） |
+| 修订思路选择 | pipeline.py `_select_idea` | ✅ `prompt_single` + isdigit + 范围检查 + 默认回退 | 安全 |
+| 修订确认 y/n | pipeline.py `_execute_revise` | ✅ `prompt_yes_no(default=True)` | 安全 |
+| 继续创作小说名 | main.py `cmd_continue` | ✅ `prompt_choice` 列表选择，不再手输 | 已修复（原拼错就找不到） |
+| 修订小说名 / 章节编号 | main.py `cmd_revise` | ✅ 两个 `prompt_choice` 列表选择 | 已修复（同上） |
+| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ `prompt_choice` 二选一 default=continue | 安全 |
 
 ### 17.2 必须修复的校验缺口
 
-#### 小说名称路径安全
+#### 小说名称路径安全 ✅ 已修复（#48）
 
-`name` 直接用于 `OUTPUT_DIR / name` 创建目录和文件。如果 `name` 包含 `../` 或特殊字符：
-
-```
-name = "../../etc"     → 路径穿越
-name = "test:bad"      → Windows 上 ":" 是非法文件名字符 → mkdir 报错
-name = "CON"           → Windows 保留设备名 → 创建文件失败
-```
-
-**检查点**：应对 `name` 做白名单过滤（仅允许中文、字母、数字、下划线、短横线）。
-
-#### 参数范围校验
+`name` 直接用于 `OUTPUT_DIR / name` 创建目录和文件。`main.py` 中 `_sanitize_novel_name` 已实现以下校验：
 
 ```
-total_chapters = 0   → range(0,0) 为空 → 直接跳到 editing → 可能崩溃
-words_min = 0        → writer 无字数要求 → LLM 输出极短
-words_min > words_max → writer 参数矛盾
+name = ""              → 非空检查
+name = "test:bad"      → 非法字符 \\/:*?"<>| 拦截
+name = "CON"           → Windows 保留名拦截（CON/PRN/AUX/NUL/COM1-9/LPT1-9，含 CON.txt 等带扩展名变体）
+name = "a."            → 尾部 '.' 或空格拦截
+len(name) > 64         → 长度上限拦截
 ```
 
-**检查点**：
-- `total_chapters` ≥ 1
-- `words_min` ≥ 500（最低合理值）
-- `words_max` ≥ `words_min`
+注：`../` 路径穿越被"非法字符 `/`"覆盖；Linux 下的 `..` 单独路径名仍可创建但不会穿越（因为 `OUTPUT_DIR / "../"` 在 Path 拼接时是字面量子目录名）。如需进一步加固，可加 `if ".." in Path(name).parts:` 检查。
+
+#### 参数范围校验 ✅ 已修复（prompt_int min_val/max_val）
+
+```
+total_chapters = 0   → prompt_int(min_val=1)
+words_min = 0        → prompt_int(min_val=500)
+words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
+```
 
 ### 17.3 用户输入导致的中断恢复
 
 | 中断场景 | 处理 |
 |---------|------|
-| Braindump 中 Ctrl+C | ✅ `except KeyboardInterrupt` → 打印"已取消"，return |
-| `_collect_params` 中 Ctrl+C | ✅ `except (KeyboardInterrupt, EOFError)` → 各 input 点有捕获 |
+| Braindump 中 Ctrl+C | ✅ `prompt_*` 抛 `UserAbort` → 上层 catch 后打印"已取消"，return |
+| `_collect_params` 中 Ctrl+C | ✅ 包裹 `try/except UserAbort` → 设置 `_interrupted` 后 return |
 | `_write_chapters` 中 Ctrl+C | ✅ `signal.SIGINT` handler → 保存 state → 设置 `_interrupted` |
 | `_edit_chapters` 中 Ctrl+C | ✅ 同上 |
-| 修订中 Ctrl+C | ✅ 多层 `except` → 打印提示后退出 |
+| 修订中 Ctrl+C | ✅ `prompt_*` 抛 `UserAbort` → 多层 catch → 打印提示后退出 |
 
-**检查点**：新增交互式 input 时必须包裹 `try/except (KeyboardInterrupt, EOFError)`。
+**检查点**：新增交互式输入时必须使用 `core/prompt_utils.py` 的 `prompt_*` 函数，并在调用处 `try/except UserAbort` 给出合理的退出/默认行为。禁止再直接使用 `input()`（Windows 无 readline 会出现光标 bug）。
 
 ---
 
 ## 十八、硬编码内容审计
+
+> *最后验证：2026-05-21*
 
 ### 18.1 Prompt 模板占位符一致性
 
@@ -927,60 +960,18 @@ words_min > words_max → writer 参数矛盾
 
 ### 18.3 硬编码字典正确性
 
-#### _BANNED_REPLACEMENTS（~45 词）
-
-禁用词有 **5 处同步维护点**，必须保持一致：
-
-| 维护点 | 文件 | 作用 |
-|--------|------|------|
-| 代码执行替换 | tracker.py `_BANNED_REPLACEMENTS` | 运行时自动替换 |
-| Writer 黑名单 | writer_system.txt "AI高频词黑名单" | 指导 Writer 不使用 |
-| Editor 替换表 | editor_system.txt "AI高频词黑名单" | 指导 Editor 替换 |
-| Reviewer 检查 | reviewer_system.txt "反AI腔检查" | 指导 Reviewer 报告 |
-| StyleAdvisor 规则 | style_advisor_system.txt "anti-ai 规则" | 指导 StyleAdvisor 生成禁用词 |
-
-**检查点**：新增禁用词时，5 处必须同步更新。
-
-#### _EMPTY_PHRASES / _ABSTRACT_NOUNS / _CLICHE_PAIRS
-
-同样有 3 处同步维护（代码 + editor prompt + reviewer prompt）。
-
-**_CLICHE_PAIRS 同步维护点**（5 对陈词滥调）：
-
-| 维护点 | 文件 | 作用 |
-|--------|------|------|
-| 代码检测 | tracker.py `_CLICHE_PAIRS` | `check_cliches` 运行时检测 |
-| Reviewer 检查 | reviewer_system.txt "陈词滥调" 章节 | 指导 Reviewer 报告具体陈词滥调 |
-| Editor 润色 | editor_system.txt | 指导 Editor 替换陈词滥调 |
-
-**注意**：当前 `_CLICHE_PAIRS` 仅 5 对，新增时必须同步更新 reviewer prompt 中的陈词滥调列表。
-
-#### _GENRE_STRICTNESS
-
-```python
-{"悬疑": "strict", "推理": "strict", "历史": "strict", "严肃": "strict",
- "爽文": "flexible", "复仇": "flexible", ...}
-```
-
-**检查点**：如果 style_advisor_system.txt 新增了题材识别关键词，必须同步在 `_GENRE_STRICTNESS` 中添加映射，否则新题材会走默认 strict。
-
-#### _FIELD_MEANINGS（~130 条）
-
-用于 `tracking_changes.csv` 的"含义"列。**检查点**：新增追踪字段时，必须同步在 `_FIELD_MEANINGS` 中添加条目，否则 CSV 中含义列为空。
-
-#### _TRACKING_FILES
-
-```python
-["character_state.json", "timeline.json", "plot_tracker.json",
- "relationships.json", "validation_rules.json", "locations.json"]
-```
-
-**检查点**：如果新增追踪文件，必须同时更新：
-1. `_TRACKING_FILES` 列表（snapshot + Phase 2.5 检查）
-2. `init_tracking` 初始化逻辑
-3. `get_tracking_context` 输出块
-4. `_consume_review` / `update_tracking` 写入逻辑
-5. config.json 的 `disabled_checks` 可选值
+> **本节字典内容已迁移至 `docs/parameters.md`**：
+> - `_BANNED_REPLACEMENTS` / `_EMPTY_PHRASES` / `_ABSTRACT_NOUNS` / `_CLICHE_PAIRS` → `parameters.md` 第七章「程序化检查规则」
+> - `_GENRE_STRICTNESS` → `parameters.md` 第五章「审核严格度」
+> - `_FIELD_MEANINGS`（~130 条完整列表）→ `parameters.md` 第九章「tracking_changes.csv 字段映射」
+> - `_TRACKING_FILES` → `parameters.md` 第八章
+>
+> **同步维护要求**（保留在此处）：
+> - 新增 `_BANNED_REPLACEMENTS` → 5 处同步（tracker.py + writer / editor / reviewer / style_advisor prompt）
+> - 新增 `_CLICHE_PAIRS` → 3 处同步（tracker.py + reviewer prompt + editor prompt）
+> - 新增 `_GENRE_STRICTNESS` → 检查 style_advisor_system.txt 题材关键词是否覆盖
+> - 新增追踪字段 → 同步 `_FIELD_MEANINGS`，否则 CSV 含义列为空
+> - 新增追踪文件 → 5 处同步（`_TRACKING_FILES` + `init_tracking` + `get_tracking_context` + `_consume_review` / `update_tracking` + `disabled_checks`）
 
 ### 18.4 硬编码变更检查步骤
 
@@ -989,3 +980,150 @@ words_min > words_max → writer 参数矛盾
 3. **常量修改** → 确认所有读取该常量的代码逻辑是否仍然正确
 4. **新增映射** → 确认反向映射是否存在（如 strictness → validation_level）
 5. **新增追踪文件** → 确认 5 个消费点全部更新
+
+---
+
+## 十九、CLI 渲染层（core/ui.py）
+
+> *最后验证：2026-05-21*
+
+### 19.1 输入/输出职责分离
+
+| 维度 | 模块 | 说明 |
+|------|------|------|
+| 输出（展示） | `core/ui.py`（rich 13.x） | banner / section / Panel / Table / 颜色 / spinner |
+| 输入（收集） | `core/prompt_utils.py`（prompt_toolkit 3.x） | prompt_single / prompt_multiline / prompt_choice / prompt_yes_no / prompt_int |
+
+**原则**：所有 `print` 必须改用 `ui.*`；输入必须改用 `prompt_*`。这两个模块互不依赖，未来要换渲染库（如 textual）只动 ui.py，不影响输入。
+
+### 19.2 ui.py 导出函数清单
+
+| 类别 | 函数 | 用途 |
+|------|------|------|
+| 横幅 | `banner(title, subtitle)` | 命令入口大横幅（cmd_new / cmd_continue / start_new_novel / resume_novel） |
+| 阶段 | `section(title, body, style)` | 阶段小标题（Phase 0-5 + 章节头） |
+| 分割 | `divider(label, style)` | Braindump 节之间的轻量分割线 |
+| Braindump | `show_braindump_intro / show_braindump_result / show_braindump_summary` | 立项问答 4 节的展示 |
+| 起名 | `show_name_candidates(candidates)` | AI 推荐的 3 候选展示 |
+| 参数 | `show_param_suggestions / show_param_confirmed` | _collect_params 的建议表 + 确认表 |
+| 章节 | `ChapterProgress` 类（**当前未启用**，见 #59） | Live 进度条上下文管理器 |
+| 完成 | `show_completion(novel_name, final_dir)` | Phase 5 完成提示 |
+| 列表 | `show_novel_list(rows)` | cmd_status 小说项目列表 |
+| 消息 | `info / warn / success / error / hint` | 滚动输出（ℹ / ⚠ / ✓ / ✗ / · 前缀） |
+
+### 19.3 Windows 平台兼容
+
+```python
+# core/ui.py 顶部（rich 导入之前）
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+```
+
+**原因**：Windows 控制台默认 GBK 编码，无法编码 ✓ / ⚠ / ℹ / Panel 边框等 Unicode 符号，会抛 `UnicodeEncodeError`。reconfigure 后 stdout/stderr 切到 UTF-8，errors="replace" 兜底无法编码字符。
+
+**检查点**：如果未来在 ui.py 之外又引入了新的 stdout 写入点，确认该写入点也走 console（即 `from core.ui import console; console.print(...)`），避免绕过 UTF-8 切换。
+
+### 19.4 ChapterProgress 设计权衡（未启用）
+
+原 plan 设计的 `ChapterProgress`（基于 `rich.progress.Progress` 的 Live 进度条）会与 `_handle_retire` 等使用 prompt_toolkit 输入的环节抢占终端控制权——rich 的 Live 渲染会持续重绘终端底部，而 prompt_toolkit 同样需要独占终端。两者冲突会导致进度条卡死或输入框错乱。
+
+**当前方案**：`_write_chapters` / `_edit_chapters` 改用 `ui.section()` 渲染章节头 + `ui.info/warn/success/hint` 滚动输出 stage 进展。视觉上不如 Live 进度条紧凑，但稳定可靠。
+
+**保留 `ChapterProgress` 类**：以便未来非交互场景（如批量 CI 生成，不存在 prompt_toolkit 输入）使用。
+
+### 19.5 main.py / pipeline.py 输出点全览
+
+| 文件 | 函数 | 主要 ui.* 调用 |
+|------|------|---------------|
+| main.py | `cmd_new` | banner + （prompt_*） + `_braindump` |
+| main.py | `_pick_novel_name` | console.status spinner + show_name_candidates + prompt_choice |
+| main.py | `_braindump` / `_braindump_section` | show_braindump_intro + divider + show_braindump_result + show_braindump_summary + info |
+| main.py | `cmd_continue` / `cmd_revise` | banner + prompt_choice + warn/error |
+| main.py | `cmd_status` | show_novel_list |
+| pipeline.py | `start_new_novel` / `resume_novel` | banner + error/hint |
+| pipeline.py | `_run_pipeline` Phase 0-5 | info / success / warn / show_completion |
+| pipeline.py | `_collect_params` | show_param_suggestions + section + show_param_confirmed |
+| pipeline.py | `_write_chapters` / `_edit_chapters` | section（章节头）+ info / warn / success / hint（stage 进展） |
+| pipeline.py | `_checkpoint` | section |
+| pipeline.py | `_handle_interrupt` / `_apply_strictness` | warn / success / hint / info |
+
+**检查点**：新增 print 输出时必须改用 `ui.*` 等价函数；不要直接 `print(...)` 或 `console.print(...)`（绕过统一 prefix 风格）。
+
+---
+
+## 二十、精修阶段链路（Phase 1.5 refining）
+
+> *最后验证：2026-05-21*
+
+### 20.1 触发与编排
+
+`directing` 完成后 `state.phase = "refining"`；`_run_pipeline` 进入 `_refine_director_output(state)`。
+全部确认后 `state.phase = "plotting"`，落盘 `world.json` 和 `outline.json` 覆盖 Director 初版。
+
+### 20.2 4 个 block 的字段范围
+
+| 方法 | 操作字段 | label | system_prompt（在 `core/refine_prompts.py`） |
+|------|---------|-------|--------------------------------------------|
+| `_refine_world` | `state.world_data` 中除 `characters`/`locations` 外的全部键（name / setting / rules / unique_elements / tone / narrative_perspective / geography / social_structure / factions / history / daily_life 等） | `"世界观"` | `REFINE_WORLD_PROMPT` |
+| `_refine_characters` | `state.world_data["characters"][]` 逐张 | `"核心角色：<name>"` | `REFINE_CHARACTER_PROMPT` |
+| `_refine_locations` | `state.world_data["locations"][]` 逐张 | `"场景地点：<name>"` | `REFINE_LOCATION_PROMPT` |
+| `_refine_outline` | `state.outline` 整块（含 theme / three_act / ending / key_turning_points / subplots / key_conflicts） | `"大纲（主题、三幕、关键转折）"` | `REFINE_OUTLINE_PROMPT` |
+
+### 20.3 三选一循环（`_refine_block`）
+
+```
+展示 Panel → prompt_choice(yes / adjust / rewrite)
+  ├─ yes      → 返回当前 result
+  ├─ adjust   → prompt_multiline 收反馈 → _llm_refine(current, feedback) → 再次展示 → 内层继续
+  └─ rewrite  → _llm_refine(current=None) → 完整重生成 → 重新展示
+```
+
+UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下走）；signal SIGINT 触发 `self._interrupted = True`，各 `_refine_*` 立即 return。
+
+### 20.4 断点续传（`state.refined_blocks`）
+
+- `NovelState.refined_blocks: list[str]`（dataclass 默认 `[]`）
+- 命名规则：`"world"` / `"outline"` / `f"character:{name}"` / `f"location:{name}"`
+- 每个 block 确认后立即 append 并 `state_mgr.save(state)`
+- 各 `_refine_*` 入口检查 `tag in state.refined_blocks` 跳过
+- 旧 state.json 无此字段时，`StateManager.load` 的 `__dataclass_fields__` 白名单过滤（#43）保证向后兼容，默认值 `[]` 自动注入
+
+### 20.5 落盘策略
+
+- 每个 block 确认 → 立即 save 到 `novel_state.json`（确保中断不丢进度）
+- 全部 4 类完成 → 重写 `world.json`（拼回 characters / locations）和 `outline.json`
+- world.json 拼接逻辑：`{除 characters/locations 外字段} + characters + locations`（防止 `_refine_world` 写回 state.world_data 时遗漏 list 字段）
+
+### 20.6 LLM 契约（`_llm_refine`）
+
+签名：`_llm_refine(system_prompt, *, label, current, user_feedback, context, rewrite=False, previous=None)`
+
+| 路径 | 入参 | system 拼接 | user msg 结构 | 温度 |
+|------|------|-------------|---------------|------|
+| 调整 (adjust) | `current=<dict\|list>, user_feedback=<str>, rewrite=False` | `system_prompt`（原 4 个 PROMPT 之一） | 上下文 + 当前版本 + 用户反馈 + "结构与当前版本一致" | `0.7` |
+| 完整重写 (rewrite) | `current=None, rewrite=True, previous=<dict\|list>` | `system_prompt + REFINE_REWRITE_DIRECTIVE` | 上下文 + **之前的版本（请勿沿用此方向）** + "彻底换一种思路重新生成，结构一致但内容方向、风格、设定明显不同" | `0.9` |
+| 兜底初版 | `current=None, rewrite=False`（保留路径，目前未被 `_refine_block` 调用） | `system_prompt` | 上下文 + "请重新生成完整内容" | `0.7` |
+
+- `_refine_block` 外层 rewrite 改传 `rewrite=True, previous=result`（旧版传 `current=None`，无反上下文导致无实质变化，#62 已修复）
+- 使用 `self.llm.chat_json`，依赖 `parse_json` 自动剥离 Markdown 围栏 / 提取首 `{` 到末 `}`
+- 解析失败时 `_llm_refine` 返回 `None`；`_refine_block` 接到 `None` 后 `ui.warn("打磨失败，保留当前版本")` 并继续循环
+
+### 20.7 上下文裁剪（`_build_refine_context`）
+
+- 故事火花：600 字
+- 世界观摘要（非 world block 时）：800 字
+- 大纲摘要（非 outline block 时）：600 字
+- 角色 / 地点 block 还会注入"其他角色/地点名"列表，提示 LLM 保持设定一致
+
+### 20.8 用户体验保留
+
+- `_collect_params` 简化（#60）后用户在参数确认面板看不到"自定义阈值/禁用类别"两步；阈值仍在 `show_param_confirmed` 中展示（仅查看，不可改）
+- 进入 refining phase 后 `ui.banner("精修阶段", ...)` + `ui.hint("[恢复] 已确认 N 个 block")` 告知用户已通过的 block
+
+**检查点**：新增 refining block 时必须：(1) 在 `core/refine_prompts.py` 加 system_prompt；(2) 在 `_refine_director_output` 编排顺序中插入；(3) 在 `state.refined_blocks` 用稳定命名规则（避免与已有 tag 冲突）；(4) 文档同步本表。
+
+---

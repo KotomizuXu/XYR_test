@@ -22,5 +22,8 @@ class DirectorAgent(BaseAgent):
         result = self.llm.chat_json(
             system, user_msg, temperature=self._temperature()
         )
+        if not isinstance(result, dict):
+            logger.error(f"Director: expected dict from chat_json, got {type(result).__name__}")
+            return {}
         logger.info(f"Director: done. Characters: {len(result.get('characters', []))}")
         return result
