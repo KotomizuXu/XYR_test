@@ -334,6 +334,11 @@ XYR_test/
 
 ## 致谢
 
+本项目通过 `skills-lock.json` 锁定了两个外部 skill 作为方法论来源：
+
+- [`penglonghuang/chinese-novelist-skill`](https://github.com/penglonghuang/chinese-novelist-skill) —— 2026-05-21 融合 A-J 十组 30 项（写作技法 / 人物 / 对话 / 评审八维 / 情节结构 / 起名 等，详见变更日志）
+- [`junaid18183/novel-architect-skills`](https://github.com/junaid18183/novel-architect-skills) —— b443649 引入，提供场景结构 / 情节模板 / 共享创作准则等架构设计
+
 本项目的追踪系统（角色状态、时间线、伏笔、关系网络、一致性校验、禁用词检查）融合自 [wordflowlab/novel-writer-skills](https://github.com/wordflowlab/novel-writer-skills) 的 `story-consistency-monitor` 技能。
 
 场景结构规划、情绪曲线设计、线索分布管理等编剧方法论参考了 [wordflowlab/novel-architect-skills](https://github.com/wordflowlab/novel-architect-skills) 的架构设计理念。
