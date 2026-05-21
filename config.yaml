@@ -11,7 +11,7 @@ novel:
   words_per_chapter:
     min: 3000
     max: 5000
-  review_max_retries: 2
+  review_max_retries: 3  # I2: review-rewrite 循环硬上限（≤3 轮重写，避免无限循环消耗 token）
   summary_max_length: 800
 
 agents:

@@ -217,6 +217,23 @@ XYR_test/
 
 ## 变更日志
 
+### 2026-05-21 融合 chinese-novelist-skill v2.0（A-J 十组共 30 项）
+
+把 `chinese-novelist-skill/references/guides/*.md` 中的写作方法论批量注入到 prompts 与代码层，每项均与用户逐一确认（30 项融合 / 6 项跳过）：
+
+- **A 组 Writer 强化（#64-#71，8 项）**：十种强力开头技巧、开头致命错误 6 条、悬念钩子十三式、章首引子七式、AI 高频词扩充（13 词）、章节节奏控制三条、中文文学技法 5 式（白描/留白/意象/草蛇灰线/蒙太奇）、打破读者预期 4 技。注入 `prompts/writer_system.txt`（12544 字）和 `prompts/editor_system.txt`（2754 字）
+- **B 组 人物塑造（#72-#75，4 项）**：director 输出 characters 增加 `mbti / biggest_fear / fatal_flaw / inner_desire` 4 字段；新增缺陷致命化原则、反派镜像主角、配角功能性。注入 `prompts/director_system.txt`
+- **C 组 对话技法（#76-#79，4 项）**：对话六目的表、潜台词四技、对话权力博弈表、对话五禁忌。注入 `prompts/writer_system.txt`
+- **D 组 扩充/防注水（#80-#82，3 项）**：内容扩充 6 技巧、题材扩充 4 策略（动作/言情/悬疑/玄幻）、防注水检测表
+- **E 组 评审体系（#83-#84，2 项）**：八维质量评分（opening_hook / plot_progression / character_depth / dialogue_quality / ending_hook / pacing / show_not_tell / language_quality，0-80 分）+ 阈值门（<60 必须 approved=false）；言情/都市 7 项 + 动作 5 项题材专项校验。JSON 新增 `quality_breakdown` 字段
+- **F 组 大纲扩展（#85，1 项）**：plotter JSON 5 新字段（previous_link / opening_hook_type / ending_hook_type / characters_on_stage / scene_list）
+- **G 组 起名增强（#86-#88，3 项）**：题材-风格映射表、五种标题创作技巧（核心冲突 / 主角命名 / 意象隐喻 / 反差 / 悬念留白）、AI 套路黑名单。注入 `core/name_generator.py _SYSTEM_PROMPT`
+- **H 组 情节结构（#89，1 项）**：8 套结构模板（三幕 / 英雄之旅 / 悬疑 / 言情 / 惊悚 / 反转 / 多线叙事 / 网文升级流）+ 题材-结构决策表
+- **I 组 工程机制（#90-#91，2 项）**：(I1) 中文字数统计 `_count_chinese_chars()` 替换 `len(text)`，续写阈值判断更准确；(I2) review-rewrite 循环硬上限 `review_max_retries=3`，到上限后接受当前版本，避免 reviewer 一直 reject 导致无限循环
+- **J 组 硬约束（#92-#93，2 项）**：(J2) 每章 ≥2 个张力波峰（writer 写入 + editor 复核）；(J4) 每章 ≥1 处意外转折（writer 硬约束段）
+
+跳过项（用户决策）：A0 自动检测题材 / B0 角色冲突矩阵 / C0 群戏调度 / I3 章节字数日志 / I4 写作日志格式 / J1 词汇丰富度自动检测 / J3 主题贯穿度自动检测。
+
 ### 2026-05-21 rewrite 实质变化 + braindump 格调适配 style
 
 针对实际跑 `new` 后用户反馈的两个严重问题（#62-#63）：

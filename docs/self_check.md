@@ -274,16 +274,19 @@ FULL_CONTEXT_TEMPLATE:
 ### 6.2 字数续写
 
 ```
-writer.run → chat() → 检查 len(text) < words_min * 0.9 → chat_with_history 续写
+writer.run → chat() → 检查 _count_chinese_chars(text) < words_min * 0.9 → chat_with_history 续写
 ```
 
-**检查点**：`0.9` 阈值硬编码在 `writer.py` 中。
+**检查点**：
+- `0.9` 阈值硬编码在 `writer.py` 中
+- **#90 I1 修复**：原 `len(text)`（含 Markdown 标记/空行/标点的总字符）→ 改为 `_count_chinese_chars(text)`（剥离 Markdown 后只统计 `[一-鿿]` 范围的中文字符），与 `chinese-novelist-skill/scripts/check_chapter_wordcount.py` 算法一致。原算法易被空行/标点/Markdown 标题"虚假撑长度"骗过续写阈值
+- 日志输出格式：`Writer: chapter done. {中文字数} 中文字 / {总字符数} 字符。`
 
 ### 6.3 重写续写
 
 ```
 writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=min(base+0.15, 0.9))
-              → 检查 len(text) < words_min * 0.9 → chat_with_history 续写（同 rewrite_temp）
+              → 检查 _count_chinese_chars(text) < words_min * 0.9 → chat_with_history 续写（同 rewrite_temp）
 ```
 
 **说明**：`rewrite` 方法同样具备字数不足续写逻辑，与 `run` 方法一致。重写时因上下文精简（只传审稿意见+草稿，不重复传 running_context），续写时可能偏离原文风格。
@@ -778,7 +781,7 @@ while not review.get("approved", False) and retries < max_retries:
     ...
 ```
 
-`max_retries = config["novel"]["review_max_retries"]` 默认 2。循环最多 2 次后退出，**不会无限循环**。
+`max_retries = config["novel"]["review_max_retries"]` 默认 **3**（I2 硬上限调整：2 → 3）。循环最多 3 次后退出，**不会无限循环**；到上限后 `ch.review_status = "needs_revision"`，UI 输出"已达 review_max_retries=3 上限（I2 硬上限），接受当前版本进入下一阶段"。
 
 退出后逻辑：
 ```python

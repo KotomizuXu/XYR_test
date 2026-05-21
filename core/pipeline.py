@@ -759,6 +759,7 @@ class NovelPipeline:
                 print(f"  [写前检查] 主角{protag['name']}：阶段={phase}，位置={loc or '未知'}")
 
     def _write_chapters(self, state: NovelState) -> None:
+        # I2: review-rewrite 循环硬上限。即便审稿一直 reject，也最多重写 max_retries 次后接受当前版本
         max_retries = self.config["novel"]["review_max_retries"]
         words_min, words_max = self._get_words_range(state)
         tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
@@ -916,7 +917,7 @@ class NovelPipeline:
                         ui.hint(f"[自动修复] 审核建议修复 {len(applied)} 处：{applied[:3]}")
             else:
                 ch.review_status = "needs_revision"
-                ui.warn("[审核] 达到最大重试次数，接受当前版本")
+                ui.warn(f"[审核] 已达 review_max_retries={max_retries} 上限（I2 硬上限），接受当前版本进入下一阶段")
 
             # Mark stage=reviewed before tracking update（中断恢复时跳过审核循环）
             if ch.stage != "tracked":

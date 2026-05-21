@@ -37,7 +37,7 @@
 | 总章数 | `20` (`novel.default_chapters`) | `style_guide.suggestions.total_chapters.recommended` | `_collect_params` input | `state.total_chapters` |
 | 每章最少字数 | `3000` (`novel.words_per_chapter.min`) | `style_guide.suggestions.words_per_chapter.min` | `_collect_params` input | `state.novel_params` |
 | 每章最多字数 | `5000` (`novel.words_per_chapter.max`) | `style_guide.suggestions.words_per_chapter.max` | `_collect_params` input | `state.novel_params` |
-| 审核最大重写次数 | `2` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.review_max_retries` |
+| 审核最大重写次数 | `3` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.review_max_retries`（I2 硬上限：≤3 轮重写） |
 | 摘要最大字数 | `800` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.summary_max_length` |
 
 ### 用户交互输入（cmd_new）
@@ -618,4 +618,45 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 |------|--------|------|----------|
 | #62 | 严重 | 三处 rewrite（braindump 章节重写 / writer 审稿打回 / refine 整块重写）都是「同 system + 同 user msg + 同温度」再调一次 LLM，GLM-5.1 输出几乎不变，用户感受"按了重写但内容没变" | **已修复 三重组合**：(a) **反上下文** — rewrite 时把当前版本拼到 user msg 标注"用户不满意，请勿沿用此方向"；(b) **升温** — braindump/refine rewrite 升至 `0.9`，writer rewrite 升至 `min(初稿温度+0.15, 0.9)`；(c) **system 明示** — 新增 3 个常量 `main._REWRITE_DIRECTIVE` / `refine_prompts.REFINE_REWRITE_DIRECTIVE` / writer `_build_system_prompt(is_rewrite=True)` 追加的"重写专项要求"段；`_llm_refine` 签名加 `rewrite=False, previous=None` 参数；`_refine_block` 外层 rewrite 改传 `rewrite=True, previous=result` |
 | #63 | 严重 | Braindump system prompt 和 4 个 section prompts 写死"文学顾问 / 情感真相 / 深层主题 / 关键问题 / 英雄之旅 / 文学弧线"等文学化措辞，对网文/言情/甜文/悬疑等题材格调完全错位（用户写"霸总爱上我"，AI 回"探索亲密关系中权力不对等的孤独"） | **已修复**：main.py 删除常量 `_SYSTEM_PROMPT`，改为函数 `_build_braindump_system(style, is_rewrite=False)`，根据传入的 `style` 字符串动态拼接 `_BRAINDUMP_SYSTEM_BASE + _BRAINDUMP_STYLE_GUIDANCE.format(style) + _BRAINDUMP_NEUTRAL_TAIL`，其中 `_BRAINDUMP_STYLE_GUIDANCE` 列出 4 类风格的措辞要求；4 条 section prompts 全部改为"多选词"中性化（核心情感/核心冲突/核心钩子/核心爽点，按故事类型自动选），structure 增加"网文升级流 / 单元剧 / 双线交织"等候选 |
+
+### 2026-05-21 融合 chinese-novelist-skill v2.0（A-J 十组共 30 项）
+
+把 `chinese-novelist-skill/references/guides/*.md` 中的写作方法论批量注入到 prompts 与代码层。30 项融合 / 6 项跳过，每项均已与用户逐一确认。
+
+| 编号 | 组 | 内容 | 注入位置 |
+|------|-----|------|----------|
+| #64 A1 | 写作 | 十种强力开头技巧（动作开场 / 冲突开场 / 悬念开场 / 反差开场 / 倒叙开场 / 对话开场 / 意象开场 / 信息差开场 / 时间锚点开场 / 视觉冲击开场） | `prompts/writer_system.txt` 输出要求段后 |
+| #65 A2 | 写作 | 开头致命错误 6 条（天气开篇 / 日常起床 / 大段回顾 / 缓慢铺垫 / 抽象议论 / 镜中描述自己） | `prompts/writer_system.txt` |
+| #66 A3 | 写作 | 悬念钩子十三式（突然揭示 / 紧急危机 / 未完成动作 / 身份反转 / 两难选择 / 神秘物品 / 时间限制 / 承诺威胁 / 离奇消失 / 言外之意 / 意象钩子 / 回声钩子 / 留白钩子） | `prompts/writer_system.txt` |
+| #67 A4 | 写作 | 章首引子七式（悬念对话 / 闪前碎片 / 倒计时 / 神秘独白 / 反差场景 / 未完成动作 / 意象伏笔） | `prompts/writer_system.txt` |
+| #68 A5 | 编辑 | AI 高频词黑名单扩充（+13 词：此外 / 然而 / 值得注意的是 / 彰显 / 诠释 / 赋能 / 映射 等）+ 四字成语堆砌检测 + 句式单一检测 + "的"字密度规则 + 用词精确规则 | `prompts/editor_system.txt` |
+| #69 A6 | 写作 | 章节节奏控制三条（长短句交替 / 段落呼吸 / 信息密度浪潮） | `prompts/writer_system.txt` |
+| #70 A7 | 写作 | 中文文学技法 5 式（白描 / 留白 / 意象 / 草蛇灰线 / 蒙太奇） | `prompts/writer_system.txt` |
+| #71 A8 | 写作 | 打破读者预期 4 技（预期反转 / 信息差 / 复杂动机 / 节外生枝） | `prompts/writer_system.txt` |
+| #72 B1 | 人物 | 角色 MBTI 字段（director 输出 characters 时填 `mbti`，便于性格一致性追踪） | `prompts/director_system.txt` |
+| #73 B2 | 人物 | 缺陷致命化原则 + fatal_flaw 字段（角色致命缺陷会在剧情高潮触发） | `prompts/director_system.txt` |
+| #74 B3 | 人物 | 反派镜像主角原则（反派应共享主角某项核心信念，但用了不同方式去实现） | `prompts/director_system.txt` |
+| #75 B4 | 人物 | 配角功能性原则（每个配角承担一种叙事功能：导师 / 对手 / 镜子 / 喜剧救济 / 牺牲推动） | `prompts/director_system.txt` |
+| #76 C1 | 对话 | 对话六目的表（推进剧情 / 揭示性格 / 制造冲突 / 传递信息 / 营造氛围 / 暗示伏笔），每段对话至少满足一项 | `prompts/writer_system.txt` 特殊场景段后 |
+| #77 C2 | 对话 | 潜台词四技（言不由衷 / 答非所问 / 沉默回避 / 反话正说） | `prompts/writer_system.txt` |
+| #78 C3 | 对话 | 对话权力博弈表（主动 / 被动 / 试探 / 反击 / 退让 / 占据上风） | `prompts/writer_system.txt` |
+| #79 C4 | 对话 | 对话五禁忌（双方都知道的信息 / 全是问答 / 全是同意 / 一句话超 30 字 / 无身体反应） | `prompts/writer_system.txt` |
+| #80 D1 | 扩充 | 内容扩充 6 技巧（场景具象化 / 内心独白 / 感官细节 / 对话扩展 / 节奏放慢 / 多视角穿插） | `prompts/writer_system.txt` |
+| #81 D2 | 扩充 | 题材扩充策略 4 种（动作类 / 言情类 / 悬疑类 / 玄幻类各自的有效扩充手段） | `prompts/writer_system.txt` |
+| #82 D3 | 编辑 | 防注水检测表（无意义风景 / 凑字数回忆 / 重复已知信息 / 过渡冗长 / 对话注水 / 同义反复） | `prompts/editor_system.txt` 输出要求段前 |
+| #83 E1 | 评审 | 八维质量评分（opening_hook / plot_progression / character_depth / dialogue_quality / ending_hook / pacing / show_not_tell / language_quality）+ 阈值门（<60 必须 approved=false） | `prompts/reviewer_system.txt`；JSON 新增 `quality_breakdown` 字段 |
+| #84 E2 | 评审 | 题材专项校验（言情 / 都市 7 项 + 动作 / 武侠 5 项），追加在已有奇幻 / 悬疑校验之后 | `prompts/reviewer_system.txt` |
+| #85 F1 | 大纲 | plotter JSON 5 新字段：`previous_link / opening_hook_type / ending_hook_type / characters_on_stage / scene_list` | `prompts/plotter_system.txt` |
+| #86 G1 | 标题 | 题材-风格映射表（7 种题材：悬疑 / 言情 / 奇幻 / 科幻 / 历史 / 都市 / 惊悚） | `core/name_generator.py _SYSTEM_PROMPT` |
+| #87 G2 | 标题 | 五种标题创作技巧（核心冲突提炼 / 主角命名 / 意象隐喻 / 反差 / 悬念留白），N 个候选必须用不同技巧 | `core/name_generator.py _SYSTEM_PROMPT` |
+| #88 G3 | 标题 | AI 套路黑名单（"XX 之道 / XX 的觉醒 / 命运 / 真相 / 震惊"等） | `core/name_generator.py _SYSTEM_PROMPT` |
+| #89 H1 | 结构 | 8 套情节结构模板（三幕 / 英雄之旅 / 悬疑结构 / 言情结构 / 惊悚结构 / 反转结构 / 多线叙事 / 网文升级流）+ 题材-结构决策表，要求 plotter 在第一章 plot_points 标注采用的骨架 | `prompts/plotter_system.txt` 开头 |
+| #90 I1 | 工程 | 中文字数统计算法（统计 `[一-鿿]` 范围内汉字，排除 Markdown 标记），用于续写阈值判断比 `len(text)` 更准确 | `agents/writer.py _count_chinese_chars()` |
+| #91 I2 | 工程 | review-rewrite 循环硬上限（≤3 轮重写），到上限后接受当前版本，避免 reviewer 一直 reject 导致无限循环 | `config.yaml novel.review_max_retries: 3` + `core/pipeline.py` 上限日志说明 |
+| #92 J2 | 硬约束 | 每章必须至少出现 2 个张力波峰（中间有低谷缓冲） | `prompts/writer_system.txt` 章节硬约束段 + `prompts/editor_system.txt` 张力波峰核查段 |
+| #93 J4 | 硬约束 | 每章必须至少 1 处意外转折（预期反转 / 信息差 / 角色反常 / 节外生枝 / 隐藏动机） | `prompts/writer_system.txt` 章节硬约束段 |
+
+跳过项（用户决策）：A0 自动检测题材 / B0 角色冲突矩阵 / C0 群戏调度 / I3 章节字数日志 / I4 写作日志格式 / J1 词汇丰富度自动检测 / J3 主题贯穿度自动检测。
+
+
 

@@ -1,11 +1,32 @@
 """Writer agent: draft chapter text."""
 
 import logging
+import re
 
 from agents.base import BaseAgent
 from core.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+
+
+def _count_chinese_chars(text: str) -> int:
+    """统计中文字符数（排除 Markdown 标记和标点）。I1。
+
+    与 chinese-novelist-skill/scripts/check_chapter_wordcount.py 的算法一致：
+    先剥离 Markdown 修饰，再统计 \\u4e00-\\u9fff 范围内的汉字数量。
+    用于字数不足续写判断比 len(text) 更准确——避免被空行 / 标点 / Markdown
+    标题撑起的"虚假长度"骗过续写阈值。
+    """
+    if not text:
+        return 0
+    # 移除 Markdown 标记（标题、粗体、斜体、删除线、行内代码、链接）
+    stripped = re.sub(r'#{1,6}\s*', '', text)
+    stripped = re.sub(r'\*\*(.*?)\*\*', r'\1', stripped)
+    stripped = re.sub(r'\*(.*?)\*', r'\1', stripped)
+    stripped = re.sub(r'~~(.*?)~~', r'\1', stripped)
+    stripped = re.sub(r'`(.*?)`', r'\1', stripped)
+    stripped = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', stripped)
+    return len(re.findall(r'[一-鿿]', stripped))
 
 
 class WriterAgent(BaseAgent):
@@ -51,10 +72,10 @@ class WriterAgent(BaseAgent):
 
         text = self.llm.chat(system, user_msg, temperature=self._temperature())
 
-        # Check word count, request continuation if too short
-        char_count = len(text)
+        # Check word count, request continuation if too short (I1: 仅统计中文字数)
+        char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
-            logger.info(f"Writer: text too short ({char_count} chars), requesting continuation...")
+            logger.info(f"Writer: text too short ({char_count} 中文字), requesting continuation...")
             continuation = self.llm.chat_with_history(
                 system,
                 [
@@ -67,7 +88,7 @@ class WriterAgent(BaseAgent):
             )
             text = text + continuation
 
-        logger.info(f"Writer: chapter done. {len(text)} chars.")
+        logger.info(f"Writer: chapter done. {_count_chinese_chars(text)} 中文字 / {len(text)} 字符。")
         return text.strip()
 
     def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
@@ -88,10 +109,10 @@ class WriterAgent(BaseAgent):
         logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')} (temp={rewrite_temp:.2f})...")
         text = self.llm.chat(system, user_msg, temperature=rewrite_temp)
 
-        # Check word count, request continuation if too short
-        char_count = len(text)
+        # Check word count, request continuation if too short (I1: 仅统计中文字数)
+        char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
-            logger.info(f"Writer: rewrite too short ({char_count} chars), requesting continuation...")
+            logger.info(f"Writer: rewrite too short ({char_count} 中文字), requesting continuation...")
             continuation = self.llm.chat_with_history(
                 system,
                 [
@@ -104,5 +125,5 @@ class WriterAgent(BaseAgent):
             )
             text = text + continuation
 
-        logger.info(f"Writer: rewrite done. {len(text)} chars.")
+        logger.info(f"Writer: rewrite done. {_count_chinese_chars(text)} 中文字 / {len(text)} 字符。")
         return text.strip()
