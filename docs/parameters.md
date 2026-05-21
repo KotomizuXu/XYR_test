@@ -250,6 +250,24 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | Critic 章节截断 | `8000` 字 | critic.py |
 | 场景氛围指南 | 4 种（欢快/紧张/神秘/浪漫） | tracker.py |
 | L3 分析频率 | 每 5 章 | pipeline.py `ch_num % 5 == 0` |
+| `_condense_world` 提取字段数 | 9 类（setting, narrative_perspective, unique_elements, rules, social_structure, geography, factions, history, daily_life, characters） | context_manager.py |
+| `_condense_outline` 提取字段数 | 4 个（theme, three_act, ending, key_turning_points） | context_manager.py |
+| `_format_chapter_plan` 格式化字段数 | 15 个（title, summary, plot_points, emotional_arc, emotional_type/intensity, characters_involved, foreshadowing, active_plotlines, act, cliffhanger, scene_structure, tension_level, location, time） | context_manager.py |
+| 追踪文件初始化检查范围 | 全部 6 个 `_TRACKING_FILES` | pipeline.py Phase 2.5 |
+
+---
+
+## 十、变更日志格式
+
+`tracking_changes.csv` 记录每章追踪数据变化，CSV 格式（UTF-8 BOM）：
+
+| 列名 | 说明 |
+|------|------|
+| `章节` | 章节编号 |
+| `字段路径` | 变更字段的 JSON 路径（如 `protagonist.currentStatus.location`） |
+| `含义` | 字段含义（由 `_lookup_field_meaning` 自动填充） |
+| `变化` | 变更内容（新值 或 `旧值 → 新值`） |
+| `来源` | 变更来源（L1/L2/L3） |
 
 ---
 
@@ -289,3 +307,30 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #23 | 中等 | `writer.py` `.format()` 如果 constitution.md 含花括号会崩溃 | agents/writer.py（改用手动替换避免 `.format()`） |
 | #24 | 轻微 | `_truncate_context` "省略N章"计数包含设计上本就排除的章节，数值偏大 | context_manager.py `_truncate_context`（改为仅统计被截断移除的数量） |
 | #25 | 轻微 | `get_tracking_context` 重复读取 `plot_tracker.json`，浪费 I/O | tracker.py `get_tracking_context`（复用已有变量） |
+
+以下问题在 2026-05-21 数据链路全量审查中发现并修复：
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #26 | 严重 | Director 输出 `locations` 未存入 `world_data`，`_condense_world` 永远读不到场景数据 | pipeline.py Phase 1（添加 `if "locations" in result` 存储） |
+| #27 | 严重 | `_condense_world` 仅提取 setting 和 characters，丢失 narrative_perspective、unique_elements、rules、social_structure、geography、factions、history、daily_life 共 8 类关键字段 | context_manager.py `_condense_world`（补全所有字段提取） |
+| #28 | 严重 | `_condense_outline` 未提取 `key_turning_points`，后续上下文缺失关键转折点信息 | context_manager.py `_condense_outline`（添加转折点提取） |
+| #29 | 严重 | `_format_chapter_plan` 仅格式化 7 个字段，丢失 emotional_type/intensity、characters_involved、foreshadowing、active_plotlines、act、location、time 共 8 个字段 | context_manager.py `_format_chapter_plan`（补全所有字段格式化） |
+| #30 | 中等 | Plotter prompt 缺少 `location`/`time`/`duration` 输出字段定义，AI 不生成这些数据导致追踪系统无来源 | prompts/plotter_system.txt（添加 3 个字段定义） |
+| #31 | 中等 | Director prompt 缺少角色 `aliases` 字段，别名修正系统无初始数据 | prompts/director_system.txt（添加 aliases 字段到角色 schema） |
+| #32 | 中等 | `_consume_review` 中 timeline 在循环内每条 issue 重复写入磁盘；`if notes:` 对 dict 类型永远为 True | tracker.py `_consume_review`（布尔标记 + 写出移至循环外） |
+| #33 | 中等 | `update_tracking` 中 character_state 被重复读取两次（line 825 和 957），浪费 I/O 且逻辑冗余 | tracker.py `update_tracking`（合并为单次读取） |
+| #34 | 中等 | Tracker 初始化仅检查 `character_state.json` 是否存在，不检查其余 5 个追踪文件 | pipeline.py Phase 2.5（改为检查全部 `_TRACKING_FILES`） |
+
+以下问题在 2026-05-21 自检审计中发现并修复：
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #35 | 严重 | `config.json` 不在 `_TRACKING_FILES` 中，Phase 2.5 不验证其存在，断点续写可能丢失配置 | pipeline.py Phase 2.5（添加独立 config.json 缺失检查） |
+| #36 | 严重 | `writer.rewrite` 缺少字数续写逻辑，审核打回重写后可能产出极短文本 | agents/writer.py `rewrite`（添加 `len(text) < words_min * 0.9` 续写） |
+| #37 | 中等 | `_consume_review` 中 `knowledge_state_issues` 写入 `supportingCharacters[].secrets` 而非 `consistency.warnings`，且遗漏主角 | tracker.py `_consume_review`（改为写入 `consistency.warnings`） |
+| #38 | 中等 | Director 生成的 `geography.travel_routes` 无人消费，`_init_timeline` 初始化空 `routes` | tracker.py `_init_timeline`（添加 `_extract_travel_routes` 从 world_data 提取） |
+| #39 | 轻微 | Director 角色 schema 中 `background` 字段无消费者，`_condense_world` 不提取 | context_manager.py `_condense_world`（角色行末添加 background 子字段提取） |
+| #40 | 轻微 | `_CLICHE_PAIRS` 5 对陈词滥调未在 reviewer prompt 中列出，审核时可能遗漏 | prompts/reviewer_system.txt（添加具体陈词滥调列表） |
+| #41 | 中等 | Director 生成的 `tone` 和 `name` 字段无消费者，`_condense_world` 不提取 | context_manager.py `_condense_world`（添加 tone/name 首行提取） |
+| #42 | 中等 | Reviewer 输出的 `strengths[]` 无人消费，rewrite 时不告知 writer 哪些部分要保留 | pipeline.py `_write_chapters` + `_execute_revise`（注入 strengths 到 rewrite 反馈） |

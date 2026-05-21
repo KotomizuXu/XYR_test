@@ -160,17 +160,69 @@ class ContextManager:
         if not world_data:
             return "（暂无）"
         lines = []
+        if "name" in world_data:
+            lines.append(f"世界观：{world_data['name']}")
+        if "tone" in world_data:
+            lines.append(f"整体基调：{world_data['tone']}")
         if "setting" in world_data:
             lines.append(f"背景：{world_data['setting']}")
+        if "narrative_perspective" in world_data:
+            lines.append(f"叙事视角：{world_data['narrative_perspective']}")
+        if "unique_elements" in world_data:
+            elements = world_data["unique_elements"]
+            if isinstance(elements, list) and elements:
+                lines.append(f"世界特色：{'；'.join(str(e) for e in elements[:5])}")
+        if "rules" in world_data:
+            lines.append(f"世界规则：{world_data['rules']}")
+        if "social_structure" in world_data:
+            ss = world_data["social_structure"]
+            if isinstance(ss, dict):
+                parts = []
+                for k in ("political_system", "economy", "social_classes", "culture"):
+                    if ss.get(k):
+                        parts.append(str(ss[k]))
+                if parts:
+                    lines.append(f"社会结构：{'；'.join(parts)}")
+        if "geography" in world_data:
+            geo = world_data["geography"]
+            if isinstance(geo, dict):
+                locs = geo.get("main_locations", [])
+                if locs:
+                    loc_names = [l.get("name", str(l)) if isinstance(l, dict) else str(l) for l in locs[:5]]
+                    lines.append(f"主要地点：{'、'.join(loc_names)}")
+        if "factions" in world_data:
+            factions = world_data["factions"]
+            if isinstance(factions, list) and factions:
+                names = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in factions[:5]]
+                lines.append(f"势力：{'、'.join(names)}")
+        if "history" in world_data:
+            history = world_data["history"]
+            if isinstance(history, list) and history:
+                events = [h.get("event", str(h)) if isinstance(h, dict) else str(h) for h in history[:3]]
+                lines.append(f"重要历史事件：{'；'.join(events)}")
+        if "daily_life" in world_data:
+            dl = world_data["daily_life"]
+            if isinstance(dl, dict):
+                parts = [f"{k}：{v}" for k, v in dl.items() if v]
+                if parts:
+                    lines.append(f"日常生活：{'；'.join(parts[:4])}")
         if "characters" in world_data:
             chars = world_data["characters"]
             if isinstance(chars, list):
+                lines.append("角色：")
                 for c in chars[:8]:
                     name = c.get("name", "")
+                    role = c.get("role", "")
                     desc = c.get("description", c.get("personality", ""))
-                    lines.append(f"- {name}：{desc}")
-        if "rules" in world_data:
-            lines.append(f"世界规则：{world_data['rules']}")
+                    role_prefix = f"（{role}）" if role else ""
+                    bg_parts = []
+                    bg = c.get("background", {})
+                    if isinstance(bg, dict):
+                        for bk, bv in bg.items():
+                            if bv:
+                                bg_parts.append(f"{bk}：{bv}")
+                    bg_str = f" [背景：{'；'.join(bg_parts)}]" if bg_parts else ""
+                    lines.append(f"  - {name}{role_prefix}：{desc}{bg_str}")
         return "\n".join(lines) if lines else str(world_data)
 
     def _condense_outline(self, outline: dict | None) -> str:
@@ -184,6 +236,10 @@ class ContextManager:
                 lines.append(f"{act_name}：{act_desc}")
         if "ending" in outline:
             lines.append(f"结局方向：{outline['ending']}")
+        if "key_turning_points" in outline:
+            points = outline["key_turning_points"]
+            if points:
+                lines.append("关键转折点：" + "；".join(str(p) for p in points))
         return "\n".join(lines) if lines else str(outline)
 
     def _format_summaries(self, summaries: list[str]) -> str:
@@ -204,10 +260,31 @@ class ContextManager:
                 lines.append(f"  - {pp}")
         if "emotional_arc" in plan:
             lines.append(f"情绪线：{plan['emotional_arc']}")
+        if "emotional_type" in plan:
+            lines.append(f"情绪类型：{plan['emotional_type']}")
+        if "emotional_intensity" in plan:
+            lines.append(f"情绪强度：{plan['emotional_intensity']}")
+        if "characters_involved" in plan:
+            lines.append(f"出场角色：{', '.join(plan['characters_involved'])}")
+        if "foreshadowing" in plan:
+            lines.append("伏笔：")
+            for fs in plan["foreshadowing"]:
+                if isinstance(fs, dict):
+                    lines.append(f"  - {fs.get('content', fs)}（可见性：{fs.get('visibility', '?')}，计划回收：第{fs.get('planned_reveal', '?')}章）")
+                else:
+                    lines.append(f"  - {fs}")
+        if "active_plotlines" in plan:
+            lines.append(f"活跃线索：{', '.join(plan['active_plotlines'])}")
+        if "act" in plan:
+            lines.append(f"所属幕：{plan['act']}")
         if "cliffhanger" in plan:
             lines.append(f"章节钩子：{plan['cliffhanger']}")
         if "scene_structure" in plan:
             lines.append(f"场景结构：{plan['scene_structure']}")
         if "tension_level" in plan:
             lines.append(f"张力等级：{plan['tension_level']}")
+        if "location" in plan:
+            lines.append(f"场景地点：{plan['location']}")
+        if "time" in plan:
+            lines.append(f"故事时间：{plan['time']}")
         return "\n".join(lines)

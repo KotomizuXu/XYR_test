@@ -184,6 +184,8 @@ class NovelPipeline:
             state.outline = result.get("outline", {})
             if "characters" in result:
                 state.world_data["characters"] = result["characters"]
+            if "locations" in result:
+                state.world_data["locations"] = result["locations"]
             if "style" in result:
                 state.outline["style"] = result["style"]
 
@@ -231,14 +233,16 @@ class NovelPipeline:
         if self._interrupted:
             return
 
-        # Phase 2.5: Initialize tracking system (always ensure tracking files exist)
+        # Phase 2.5: Initialize tracking system (ensure ALL tracking files exist)
         if state.phase == "writing":
             tracker = Tracker(self.state_mgr.get_novel_dir(state.novel_name), novel_name=state.novel_name)
-            if not tracker._read_json("character_state.json"):
-                print("[追踪系统] 正在初始化追踪数据...")
+            missing = [f for f in Tracker._TRACKING_FILES if not tracker._read_json(f)]
+            config_missing = not tracker._read_json("config.json")
+            if missing or config_missing:
+                print(f"[追踪系统] 缺失追踪文件：{missing}{'config.json' if config_missing else ''}，正在初始化...")
                 tracker.init_tracking(state.world_data, state.outline, state.chapter_plans)
                 self._apply_validation_level(tracker)
-                print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络）\n")
+                print("[追踪系统] 追踪数据已初始化（角色状态、时间线、情节线、伏笔、关系网络、配置）\n")
 
         if self._interrupted:
             return
@@ -587,6 +591,11 @@ class NovelPipeline:
                     f"- [{i.get('severity')}] {i.get('description')} → 建议：{i.get('suggestion')}"
                     for i in issues
                 )
+                strengths = review.get("strengths", [])
+                if strengths:
+                    feedback += "\n\n以下部分写得很好，重写时请保留：\n" + "\n".join(
+                        f"- {s}" for s in strengths
+                    )
                 draft = self.writer.rewrite(draft, feedback, plan, running_ctx, style_guide=state.style_guide, words_min=words_min, words_max=words_max)
 
                 draft_path = dirs["drafts"] / f"chapter_{ch_num:02d}_r{retries}.txt"
@@ -839,6 +848,11 @@ class NovelPipeline:
                     f"- [{iss.get('severity')}] {iss.get('description')} → {iss.get('suggestion')}"
                     for iss in review.get("issues", [])
                 )
+                strengths = review.get("strengths", [])
+                if strengths:
+                    additional += "\n\n以下部分写得很好，重写时请保留：\n" + "\n".join(
+                        f"- {s}" for s in strengths
+                    )
                 revised = self.writer.rewrite(
                     revised, additional, chapter_plan, running_ctx,
                     style_guide=state.style_guide,

@@ -264,7 +264,7 @@ class Tracker:
 
     def init_tracking(self, world_data: dict, outline: dict, chapter_plans: list[dict]) -> None:
         self._init_character_state(world_data)
-        self._init_timeline(chapter_plans)
+        self._init_timeline(chapter_plans, world_data)
         self._init_plot_tracker(outline, chapter_plans)
         self._init_relationships(world_data)
         self._init_validation_rules(world_data)
@@ -393,7 +393,7 @@ class Tracker:
 
         self._write_json("character_state.json", state)
 
-    def _init_timeline(self, chapter_plans: list[dict]) -> None:
+    def _init_timeline(self, chapter_plans: list[dict], world_data: dict | None = None) -> None:
         now = self._now()
         events = []
         start_time = ""
@@ -422,12 +422,21 @@ class Tracker:
             "parallelEvents": {"timepoints": {}},
             "historicalContext": {"events": []},
             "timeLogic": {
-                "travelTimes": {"routes": {}},
+                "travelTimes": {"routes": self._extract_travel_routes(world_data)},
                 "constraints": [],
             },
             "anomalies": {"issues": []},
         }
         self._write_json("timeline.json", timeline)
+
+    @staticmethod
+    def _extract_travel_routes(world_data: dict | None) -> dict:
+        routes = {}
+        if world_data:
+            for r in world_data.get("geography", {}).get("travel_routes", []):
+                key = f"{r.get('from', '?')}→{r.get('to', '?')}"
+                routes[key] = r.get("distance", "")
+        return routes
 
     def _init_plot_tracker(self, outline: dict, chapter_plans: list[dict]) -> None:
         now = self._now()
@@ -857,8 +866,6 @@ class Tracker:
             "chapter": chapter_num,
             "appearances": appearances,
         })
-        char_state["lastUpdated"] = now
-        self._write_json("character_state.json", char_state)
         report["characters_updated"] = updated_chars
 
         # Build bidirectional dynamicRelations for co-occurring characters
@@ -953,8 +960,7 @@ class Tracker:
             loc_data["lastUpdated"] = now
             self._write_json("locations.json", loc_data)
 
-        # Update protagonist state from chapter plan
-        char_state = self._read_json("character_state.json")
+        # Update protagonist state from chapter plan (reuse char_state, no second read)
         protag = char_state.get("protagonist", {})
         if protag.get("name"):
             if location_info:
@@ -985,71 +991,86 @@ class Tracker:
         return report
 
     def _consume_review(self, chapter_num: int, review: dict) -> None:
-        """Extract data from reviewer's existing output into dead tracking fields."""
+        """Extract data from reviewer's existing output into tracking fields."""
         consistency = review.get("consistency_checks", {})
+        now = self._now()
 
-        # Character issues → consistency.warnings + physicalTraits + personalityTraits
+        # --- Character issues ---
         char_state = self._read_json("character_state.json")
+        char_changed = False
         consistency_block = char_state.setdefault("consistency", {})
 
         for issue in consistency.get("character_issues", []):
             consistency_block.setdefault("warnings", []).append(f"第{chapter_num}章 角色问题：{issue}")
+            char_changed = True
 
         for issue in consistency.get("physical_traits_issues", []):
-            traits = consistency_block.setdefault("physicalTraits", {})
-            traits[f"ch{chapter_num}"] = issue
+            consistency_block.setdefault("physicalTraits", {})[f"ch{chapter_num}"] = issue
+            char_changed = True
 
         for issue in consistency.get("personality_issues", []):
-            traits = consistency_block.setdefault("personalityTraits", {})
-            traits[f"ch{chapter_num}"] = issue
+            consistency_block.setdefault("personalityTraits", {})[f"ch{chapter_num}"] = issue
+            char_changed = True
 
-        # Knowledge state issues → supportingCharacters secrets
         for issue in consistency.get("knowledge_state_issues", []):
-            for name, data in char_state.get("supportingCharacters", {}).items():
-                if name in str(issue):
-                    data.setdefault("secrets", []).append(f"第{chapter_num}章：{issue}")
-                    break
+            consistency_block.setdefault("warnings", []).append(f"第{chapter_num}章 知识/状态问题：{issue}")
+            char_changed = True
 
-        if consistency_block:
-            char_state["lastUpdated"] = self._now()
+        if char_changed:
+            char_state["lastUpdated"] = now
             self._write_json("character_state.json", char_state)
 
-        # World issues → plot_tracker.notes.plotHoles
+        # --- Plot tracker (world issues + issue-typed entries) ---
         plot_tracker = self._read_json("plot_tracker.json")
+        plot_changed = False
         notes = plot_tracker.setdefault("notes", {})
+
         for issue in consistency.get("world_issues", []):
             notes.setdefault("plotHoles", []).append(f"第{chapter_num}章：{issue}")
             notes.setdefault("inconsistencies", []).append(f"第{chapter_num}章 世界观：{issue}")
+            plot_changed = True
 
-        # Timeline issues → timeline.anomalies
+        # --- Timeline issues (collect first, write once) ---
         timeline = self._read_json("timeline.json")
+        timeline_changed = False
+
         for issue in consistency.get("timeline_issues", []):
             timeline.setdefault("anomalies", {}).setdefault("issues", []).append(
                 f"第{chapter_num}章：{issue}"
             )
-            timeline["lastUpdated"] = self._now()
+            timeline_changed = True
+
+        if timeline_changed:
+            timeline["lastUpdated"] = now
             self._write_json("timeline.json", timeline)
 
-        # Issues by type → relationships.conflicts + plot_tracker.notes
+        # --- Issues by type → relationships + plot_tracker ---
         relationships = self._read_json("relationships.json")
+        rel_changed = False
+
         for issue in review.get("issues", []):
             issue_type = issue.get("type", "")
             desc = issue.get("description", "")
             entry = f"第{chapter_num}章：{desc}"
             if issue_type == "character":
                 relationships.setdefault("conflicts", {}).setdefault("personal", []).append(entry)
+                rel_changed = True
             elif issue_type == "worldbuilding":
                 notes.setdefault("inconsistencies", []).append(entry)
+                plot_changed = True
 
-        if notes:
-            plot_tracker["lastUpdated"] = self._now()
+        if plot_changed:
+            plot_tracker["lastUpdated"] = now
             self._write_json("plot_tracker.json", plot_tracker)
 
-        relationships["lastUpdated"] = self._now()
-        self._write_json("relationships.json", relationships)
+        if rel_changed:
+            relationships["lastUpdated"] = now
+            self._write_json("relationships.json", relationships)
 
-        # auto_fix_suggestions → validation_rules.common_errors
+        # --- Auto-fix suggestions → validation_rules ---
         rules = self._read_json("validation_rules.json")
+        rules_changed = False
+
         for fix in review.get("auto_fix_suggestions", []):
             orig = fix.get("original", "")
             suggested = fix.get("suggested", "")
@@ -1061,7 +1082,10 @@ class Tracker:
                     "correct": suggested,
                     "chapter": chapter_num,
                 })
-        self._write_json("validation_rules.json", rules)
+                rules_changed = True
+
+        if rules_changed:
+            self._write_json("validation_rules.json", rules)
 
     # --- Forgotten elements check ---
 

@@ -125,9 +125,9 @@ flowchart LR
 
     subgraph 核心数据
         SG[style_guide<br/>─────────<br/>tone/pacing/plot<br/>character/worldbuilding<br/>review/editing<br/>setting/requirements<br/>style_presets<br/>agent_temperatures]
-        WD[world_data<br/>─────────<br/>世界观+角色]
-        OL[outline<br/>─────────<br/>三幕大纲]
-        CP[chapter_plans<br/>─────────<br/>每章计划]
+        WD[world_data<br/>─────────<br/>世界观+角色+locations<br/>场景地点+五感+氛围]
+        OL[outline<br/>─────────<br/>三幕大纲+key_turning_points]
+        CP[chapter_plans<br/>─────────<br/>每章计划+场景结构+情绪类型<br/>张力+地点+时间+伏笔+活跃线索]
         WP[words_min/max<br/>─────────<br/>字数范围]
     end
 
@@ -138,6 +138,7 @@ flowchart LR
         RL[relationships.json<br/>分类关系+派系<br/>历史+预测]
         VR[validation_rules.json<br/>三级验证+auto_fix<br/>常见错误库]
         CF[config.json<br/>阈值/严格度/退役]
+        LOC[locations.json<br/>场景地点+五感+氛围]
     end
 
     subgraph 输出
@@ -151,6 +152,7 @@ flowchart LR
     STYLE --> SG
     SG --> WD & OL & CP & WP
     WD & OL & CP --> CS & TL & PT & RL & VR & CF
+    WD -->|locations| LOC
     CS & TL & PT & RL --> DR
     DR --> RR
     DR --> ED
@@ -167,7 +169,7 @@ flowchart TD
         CHECK[① _pre_write_check<br/>检查8项数据完整性]
         CHECK --> TC[② get_tracking_context<br/>角色状态/时间线/伏笔/关系/冲突/异常/警告]
         TC --> FG[③ check_forgotten<br/>角色10章 / 支线12章 / 伏笔20章]
-        FG --> CTX[④ build_running_context<br/>世界观+大纲+前文摘要+追踪数据]
+        FG --> CTX[④ build_running_context<br/>世界观(9类字段)+大纲(含转折点)<br/>前文摘要+追踪数据+章节计划(15字段)]
     end
 
     CTX --> WRITE

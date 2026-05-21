@@ -2,10 +2,10 @@
 # Python 3.10+
 
 # API 调用（Anthropic SDK，兼容 GLM 接口）
-anthropic>=0.100.0
+anthropic>=0.100.0,<1.0.0
 
 # 环境变量管理
-python-dotenv>=1.0.0
+python-dotenv>=1.0.0,<2.0.0
 
 # 配置文件解析
-pyyaml>=6.0
+pyyaml>=6.0,<7.0

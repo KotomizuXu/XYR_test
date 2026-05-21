@@ -76,5 +76,22 @@ class WriterAgent(BaseAgent):
 
         logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')}...")
         text = self.llm.chat(system, user_msg, temperature=self._temperature())
+
+        # Check word count, request continuation if too short
+        char_count = len(text)
+        if char_count < words_min * 0.9:
+            logger.info(f"Writer: rewrite too short ({char_count} chars), requesting continuation...")
+            continuation = self.llm.chat_with_history(
+                system,
+                [
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
+                ],
+                temperature=self._temperature(),
+                max_tokens=None,
+            )
+            text = text + continuation
+
         logger.info(f"Writer: rewrite done. {len(text)} chars.")
         return text.strip()
