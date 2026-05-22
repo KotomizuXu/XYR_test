@@ -15,3 +15,8 @@ prompt_toolkit>=3.0.0,<4.0.0
 
 # 终端渲染（Panel/Table/进度条/颜色）
 rich>=13.0.0,<14.0.0
+
+# Web 服务（FastAPI + WebSocket）
+fastapi>=0.104.0,<1.0.0
+uvicorn[standard]>=0.24.0,<1.0.0
+websockets>=12.0,<13.0

@@ -589,10 +589,11 @@ tmp_path.replace(state_path)  # 原子 rename
 styling → collecting_params → directing → plotting → writing → editing → complete
                                     ↑                  ↑
                               Phase 1              Phase 2.5
-                         (增量生成+逐个确认)       (追踪初始化)
+                         (一次性生成+全量精修)      (追踪初始化)
 ```
 
 > 旧版 phase `refining` 仍被识别（向后兼容），走 `_refine_director_output()` 旧流程。
+> 旧版增量生成的 state（含 `planned_cast`）由 `_run_directing_holistic` 自动剥离后走全量精修。
 
 每个 phase 用 `if state.phase == "xxx"` 守卫，顺序排列在 `_run_pipeline` 中。通过后设置 `state.phase = "next_phase"` 并 save。
 
@@ -604,7 +605,7 @@ styling → collecting_params → directing → plotting → writing → editing
 |------|---------|------|
 | styling | ✅ | 重新生成 style_guide |
 | collecting_params | ✅ | 重新收集参数 |
-| directing | ✅ | 增量生成：已确认的 block 通过 `state.refined_blocks` 跳过，未确认的从断点续上 |
+| directing | ✅ | 全量精修：`state.refined_blocks` 含 `"holistic"` 时跳过，否则重新生成或从已有数据进入精修 |
 | refining（旧） | ✅ | 向后兼容旧 state，走 `_refine_director_output()` |
 | plotting | ✅ | 重新生成章节计划 |
 | writing（从中间章节） | ✅ | `current_chapter` 索引从 i 继续 |
@@ -898,7 +899,7 @@ if groups.get("inactive") or groups.get("deceased"): ...
 | 修订确认 y/n | pipeline.py `_execute_revise` | ✅ `prompt_yes_no(default=True)` | 安全 |
 | 继续创作小说名 | main.py `cmd_continue` | ✅ `prompt_choice` 列表选择，不再手输 | 已修复（原拼错就找不到） |
 | 修订小说名 / 章节编号 | main.py `cmd_revise` | ✅ 两个 `prompt_choice` 列表选择 | 已修复（同上） |
-| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ `prompt_choice` 二选一 default=continue | 安全 |
+| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ `prompt_choice` 二选一 default=continue（CLI）；Web 模式自动继续不弹确认（#124） | 安全 |
 
 ### 17.2 必须修复的校验缺口
 
@@ -1059,43 +1060,53 @@ if sys.platform == "win32":
 | pipeline.py | `_run_pipeline` Phase 0-5 | info / success / warn / show_completion |
 | pipeline.py | `_collect_params` | show_param_suggestions + section + show_param_confirmed |
 | pipeline.py | `_write_chapters` / `_edit_chapters` | section（章节头）+ info / warn / success / hint（stage 进展） |
-| pipeline.py | `_checkpoint` | section |
+| pipeline.py | `_checkpoint` | section（CLI）；Web 模式自动保存继续（#124） |
+| pipeline.py | `_pre_write_check` | hint / warn（#127） |
+| pipeline.py | `_report_forgotten` | warn（#128） |
+| pipeline.py | `_handle_retire` | hint / info / success（#129） |
+| pipeline.py | `revise_chapter` / `_execute_revise` / `_select_idea` | section / info / warn / success / hint（#126） |
 | pipeline.py | `_handle_interrupt` / `_apply_strictness` | warn / success / hint / info |
+| agents/plotter.py | `Plotter.run` | info（#131） |
 
 **检查点**：新增 print 输出时必须改用 `ui.*` 等价函数；不要直接 `print(...)` 或 `console.print(...)`（绕过统一 prefix 风格）。
 
 ---
 
-## 二十、精修阶段链路（Phase 1 增量生成 + 精修确认）
+## 二十、精修阶段链路（Phase 1 一次性生成 + 全量精修）
 
 > *最后验证：2026-05-22*
 
 ### 20.1 触发与编排
 
-`collecting_params` 完成后 `state.phase = "directing"`；`_run_pipeline` 进入 `_run_incremental_directing(state)`。
+`collecting_params` 完成后 `state.phase = "directing"`；`_run_pipeline` 进入 `_run_directing_holistic(state)`。
 
-**增量生成流程**（2026-05-22 重构）：
-1. `director.run_world()` → 生成世界观 + `planned_cast` + `planned_locations` → 精修确认
-2. 逐个 `director.run_character()` → 生成角色卡（带已确认世界观+已有角色上下文）→ 精修确认
-3. 逐个 `director.run_location()` → 生成地点卡（带已确认世界观+角色上下文）→ 精修确认
-4. `director.run_outline()` → 生成大纲（带全部已确认上下文）→ 精修确认
-5. 清理 `planned_cast`/`planned_locations`，落盘 `world.json`/`outline.json`，`state.phase = "plotting"`
+**全量精修流程**（2026-05-22 重构）：
+1. 若 `state.world_data` 为空 → `director.run()` 一次性生成全部设定 → 拆分到 `state.world_data` + `state.outline`
+2. 合并 `world_data`（不含 characters/locations）+ characters + locations + outline → `full_json`
+3. `_refine_block()` 传入 `REFINE_HOLISTIC_PROMPT` + `full_json` → 用户对整体做"是/调整/重写"三选一
+4. 每次调整/重写 LLM 接收并返回完整 JSON，确保跨 block 一致性
+5. 精修完成 → 拆回 `state.world_data` 和 `state.outline` → 落盘 `world.json`/`outline.json` → `state.phase = "plotting"`
 
-> 旧版 `phase="refining"` 的 state 走 `_refine_director_output()` 旧流程（向后兼容）。
+### 20.2 全量精修的 JSON 结构
 
-### 20.2 增量生成的上下文构建
+`_merge_director_output` 将 state 合并为：
+```json
+{
+  "world_data": { "..." },
+  "characters": [ ... ],
+  "locations": [ ... ],
+  "outline": { "..." }
+}
+```
 
-| 方法 | 用途 | 包含内容 |
-|------|------|---------|
-| `_build_director_context_json` | Director 生成步骤的上下文 | world（去除 characters/locations/planned_*）+ 已确认 characters + 已确认 locations，完整 JSON 无截断 |
-| `_build_incremental_context` | 精修步骤的上下文 | 故事火花(600字) + 风格 + 已确认世界观(2000字) + 已确认角色完整数据(2000字) + 已确认地点完整数据(2000字) + 大纲(1500字) |
+LLM 输出必须保持相同的顶层结构。`_split_director_output` 将结果拆回 `state.world_data` 和 `state.outline`。
 
 ### 20.3 三选一循环（`_refine_block`）
 
 ```
 展示 Panel → prompt_choice(yes / adjust / rewrite)
   ├─ yes      → 返回当前 result
-  ├─ adjust   → prompt_multiline 收反馈 → _llm_refine(current, feedback) → 再次展示 → 内层继续
+  ├─ adjust   → prompt_multiline 收反馈 → _llm_refine(current=full_json, feedback) → 再次展示 → 内层继续
   └─ rewrite  → _llm_refine(current=None) → 完整重生成 → 重新展示
 ```
 
@@ -1104,16 +1115,14 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 ### 20.4 断点续传（`state.refined_blocks`）
 
 - `NovelState.refined_blocks: list[str]`（dataclass 默认 `[]`）
-- 命名规则：`"world"` / `"outline"` / `f"character:{name}"` / `f"location:{name}"`
-- 每个 block 确认后立即 append 并 `state_mgr.save(state)`
-- 增量生成入口检查 `tag in state.refined_blocks` 跳过已确认的 block
+- 全量精修标记：`"holistic"`（一个标记代表整个 director 阶段已确认）
+- 断点恢复时若 `"holistic" in state.refined_blocks` → 直接推进到 plotting
 - 旧 state.json 无此字段时，`StateManager.load` 的 `__dataclass_fields__` 白名单过滤（#43）保证向后兼容，默认值 `[]` 自动注入
 
 ### 20.5 落盘策略
 
-- 每个 block 确认 → 立即 save 到 `novel_state.json`（确保中断不丢进度）
-- 全部确认完成 → 清理 `planned_cast`/`planned_locations`，重写 `world.json` 和 `outline.json`
-- world.json 拼接逻辑：`{除 characters/locations 外字段} + characters + locations`
+- 精修完成 → 拆回 state → save 到 `novel_state.json`
+- `_advance_to_plotting` 重写 `world.json`（`{除 characters/locations 外字段} + characters + locations`）和 `outline.json`
 
 ### 20.6 LLM 契约（`_llm_refine`）
 
@@ -1121,16 +1130,93 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 
 | 路径 | 入参 | system 拼接 | user msg 结构 | 温度 |
 |------|------|-------------|---------------|------|
-| 调整 (adjust) | `current=<dict\|list>, user_feedback=<str>, rewrite=False` | `system_prompt`（原 4 个 PROMPT 之一） | 上下文 + 当前版本 + 用户反馈 + "结构与当前版本一致" | `0.7` |
-| 完整重写 (rewrite) | `current=None, rewrite=True, previous=<dict\|list>` | `system_prompt + REFINE_REWRITE_DIRECTIVE` | 上下文 + **之前的版本（请勿沿用此方向）** + "彻底换一种思路重新生成，结构一致但内容方向、风格、设定明显不同" | `0.9` |
-| 兜底初版 | `current=None, rewrite=False`（保留路径，目前未被 `_refine_block` 调用） | `system_prompt` | 上下文 + "请重新生成完整内容" | `0.7` |
+| 调整 (adjust) | `current=<full_json>, user_feedback=<str>, rewrite=False` | `REFINE_HOLISTIC_PROMPT` | 上下文（故事火花+风格）+ 当前版本 + 用户反馈 + "结构与当前版本一致" | `0.7` |
+| 完整重写 (rewrite) | `current=None, rewrite=True, previous=<full_json>` | `REFINE_HOLISTIC_PROMPT + REFINE_REWRITE_DIRECTIVE` | 上下文 + **之前的版本（请勿沿用此方向）** + "彻底换一种思路重新生成" | `0.9` |
 
 ### 20.7 向后兼容
 
-- 旧 `phase="refining"` + 已有 `world_data`（含 characters/locations）→ 走 `_refine_director_output()` 旧流程
-- 旧 `phase="directing"` + 已有 `world_data`（无 `planned_cast`）→ 检测为旧格式，走旧精修流程
-- 旧 prompt 文件 `director_system.txt` 保留，供旧 `DirectorAgent.run()` 方法使用
-
-**检查点**：新增 refining block 时必须：(1) 在 `core/refine_prompts.py` 加 system_prompt；(2) 在 `_run_incremental_directing` 编排顺序中插入；(3) 在 `state.refined_blocks` 用稳定命名规则（避免与已有 tag 冲突）；(4) 文档同步本表。
+- 旧 `phase="refining"` → 不再由主流程处理（已移除跳转），此类 state 需手动 reset
+- 旧增量 state（含 `planned_cast`/`planned_locations`）→ `_run_directing_holistic` 自动剥离后走全量精修
+- 旧 `_run_incremental_directing` 方法保留但不再被主流程调用，待确认稳定后删除
 
 ---
+
+## 二十一、Web 架构
+
+> *最后验证：2026-05-22*
+
+### 21.1 双入口共存
+
+| 入口 | 命令 | 交互层 | 适用场景 |
+|------|------|--------|---------|
+| CLI | `py -3.10 main.py` | `core/prompt_utils` + `core/ui`（Rich） | 终端环境、服务器无头运行 |
+| Web | `py -3.10 web_main.py` | `web/bridge/web_prompt` + `web/bridge/web_ui`（WebSocket） | 桌面浏览器、可视化操作 |
+
+CLI 和 Web 使用完全相同的 pipeline 逻辑（`core/pipeline.py`），区别仅在于交互层的实现。
+
+### 21.2 桥接层注入
+
+`web/bridge/__init__.py` 的 `install_web_bridge()` 在 `web/app.py` 中、`import core.pipeline` 之前执行，将 `core.prompt_utils` 和 `core.ui` 模块的函数替换为 WebSocket 版本。
+
+替换链路：
+- `prompt_choice` → `web_prompt.web_prompt_choice`：构造 `input_request` 消息 → 放入 `session.output_queue` → 阻塞等 `session.input_queue` 响应
+- `ui.info` → `web_ui.info`：构造 `output` 消息 → 放入 `session.output_queue` → 不阻塞
+- `LLMClient.Spinner` → 空操作：Web 环境下不输出终端 spinner
+
+### 21.3 WebSocket 协议
+
+端点：`/ws`
+
+消息格式（JSON）：
+
+| 方向 | type | 用途 |
+|------|------|------|
+| S→C | `output` | 展示消息（info/warn/success/error/hint/banner/section/refine_block/progress/completion 等） |
+| S→C | `input_request` | 请求用户输入（choice/yes_no/single/multiline/int），含 `request_id` |
+| S→C | `session_started` | 会话创建 |
+| S→C | `session_ended` | 会话结束（completed/error/cancelled） |
+| C→S | `start` | 启动 pipeline（mode: new/continue/revise + params） |
+| C→S | `input_response` | 回应输入请求（`request_id` + `value`） |
+| C→S | `cancel` | 取消当前操作 |
+
+### 21.4 REST API
+
+| 路由 | 方法 | 用途 |
+|------|------|------|
+| `/api/novels` | GET | 小说列表（名称/阶段/进度/灵感预览/章节列表） |
+| `/api/novels/{name}` | GET | 小说详情（含 world_data/outline/chapters/refined_blocks） |
+| `/api/novels/{name}/chapter/{num}` | GET | 章节最终文本内容 |
+
+### 21.5 会话管理
+
+`web/bridge/session.py`：每个 WebSocket 连接创建一个 `BridgeSession`（含 `output_queue` + `input_queue` + `cancelled` Event），pipeline 在独立 daemon 线程中运行。`threading.local()` 绑定当前线程的会话引用，支持多会话并发。
+
+### 21.6 前端
+
+Vue3 SPA + Naive UI（暗色主题 + 绿色强调），Vite 构建，产物由 FastAPI 直接服务。
+
+核心组件：
+- `InputDispatcher` — 按 kind 分发到 PromptChoice/YesNo/Single/Multiline/Int
+- `MessageLog` — 消息流展示（含 braindump_result/refine_block/progress 等）
+- `RefineBlockViewer` — NTabs 分页展示设定详情（world_data/characters/locations/outline）
+- `JsonViewer` — 通用易读 JSON 展示组件（#133-#141）。Props: `data`/`type`/`auto`。关键逻辑：`worldObj` 解析 holistic directing 的 `data.world` 嵌套结构；`charsList` 兼容顶层和嵌套角色数组。渲染策略：概要→n-descriptions，列表→n-list+n-thing 卡片，短数组→n-tag，角色→嵌套 n-collapse（主层关键字段+子维度折叠），原始 JSON 折叠兜底。统一 `.jv-sub-title` 样式类。
+
+### 21.7 文件结构
+
+```
+web/                        # Python 后端
+├── app.py                  # FastAPI 应用入口
+├── bridge/
+│   ├── __init__.py         # install_web_bridge() monkey-patch
+│   ├── session.py          # BridgeSession + SessionManager
+│   ├── web_prompt.py       # 5 个 prompt_* 的 WebSocket 版
+│   └── web_ui.py           # ui.* 的 WebSocket 版 + WebChapterProgress
+└── routers/
+    └── novels.py           # REST API
+
+frontend/                   # Vue3 SPA
+├── src/views/              # 4 个页面（Home/NewNovel/NovelDetail/Revise）
+├── src/components/         # 交互组件 + 展示组件
+├── src/store/              # Pinia 状态管理（WebSocket 消息流）
+└── dist/                   # 构建产物（FastAPI 服务）
+```

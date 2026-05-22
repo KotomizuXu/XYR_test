@@ -56,6 +56,30 @@ _SYSTEM_PROMPT = """你是一位文学作品的命名专家。你的任务是根
 
 
 _INVALID_CHARS = set('\\/:*?"<>|')
+_MAX_NAME_LENGTH = 64
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def sanitize_novel_name(name: str) -> tuple[bool, str]:
+    """校验小说名是否可作为文件夹名。返回 (是否合法, 错误信息或合法名称)。"""
+    name = name.strip()
+    if not name:
+        return False, "小说名称不能为空"
+    if len(name) > _MAX_NAME_LENGTH:
+        return False, f"小说名称过长（>{_MAX_NAME_LENGTH} 字符），请使用更短的名字"
+    bad = [c for c in name if c in _INVALID_CHARS]
+    if bad:
+        return False, f"小说名称包含非法字符：{''.join(set(bad))}（不允许 \\ / : * ? \" < > |）"
+    if name.endswith(".") or name.endswith(" "):
+        return False, "小说名称不能以 '.' 或空格结尾（Windows 兼容性）"
+    base_name = name.split(".", 1)[0].upper()
+    if base_name in _WINDOWS_RESERVED_NAMES:
+        return False, f"「{name}」是 Windows 保留名，请换一个名字"
+    return True, name
 
 
 def _clean_candidate(line: str) -> str | None:

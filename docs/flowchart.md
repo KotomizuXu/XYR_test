@@ -30,18 +30,12 @@ flowchart TD
 
     P05 --> P1
 
-    subgraph P1["Phase 1: 导演 增量生成+逐个确认"]
-        P1A[run_world → 生成世界观<br/>+ planned_cast + planned_locations] --> P1RA
-        P1RA[精修世界观<br/>是/调整/重写] --> P1B
-        P1B[run_character × N<br/>逐个生成角色卡<br/>带已确认世界观+角色上下文] --> P1RB
-        P1RB[精修角色卡<br/>是/调整/重写] --> P1C
-        P1C[run_location × M<br/>逐个生成地点卡<br/>带已确认世界观+角色上下文] --> P1RC
-        P1RC[精修地点卡<br/>是/调整/重写] --> P1D
-        P1D[run_outline → 生成大纲<br/>带全部已确认上下文] --> P1RD
-        P1RD[精修大纲<br/>是/调整/重写]
+    subgraph P1["Phase 1: 导演 一次性生成+全量精修"]
+        P1A[director.run → 一次性生成<br/>世界观+角色+地点+大纲] --> P1B
+        P1B[全量精修<br/>合并为完整 JSON<br/>是/调整/重写<br/>每次 LLM 返回完整 JSON<br/>确保跨 block 一致性]
     end
 
-    P1 --> |refined_blocks ✓<br/>world.json / outline.json| P2
+    P1 --> |holistic ✓<br/>world.json / outline.json| P2
 
     subgraph P2["Phase 2: 编剧 PlotAgent"]
         P2A[章节拆分] --> P2B

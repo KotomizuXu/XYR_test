@@ -617,6 +617,98 @@
 
 与 B4 的关系：B4 判定"死字段"的范围仅限于已有字段；J2 是增量检查，确保新增字段不会在下次验证前就已变成死字段
 
+### K. Web 桥接层完整性
+
+> 目标：Web 前端模式下，monkey-patch 桥接层覆盖所有 CLI 入口函数，WebSocket 消息协议前后端一致，REST API 数据正确
+
+---
+
+**K1. Monkey-patch 覆盖完整性**
+
+检查目标：`web/bridge/__init__.py` 中 `install_web_bridge()` 是否替换了 `core/prompt_utils` 和 `core/ui` 中所有被 pipeline 调用的函数。
+
+检查方法：
+1. 在 `core/prompt_utils.py` 中列出所有公开函数（`prompt_choice`、`prompt_yes_no`、`prompt_single`、`prompt_multiline`、`prompt_int`、`is_interactive`、`UserAbort`）
+2. 在 `core/ui.py` 中列出所有公开函数（`info`、`warn`、`success`、`error`、`hint`、`banner`、`section`、`divider`、`show_refine_block`、`show_param_suggestions`、`show_param_confirmed`、`show_braindump_intro`、`show_braindump_result`、`show_braindump_summary`、`show_name_candidates`、`show_completion`、`show_novel_list`、`ChapterProgress`）
+3. 确认 `install_web_bridge` 对以上每个名称都有 `setattr(module, name, web_func)` 替换
+
+通过条件：所有公开函数/类均被替换；`core/llm_client.Spinner` 被替换为空操作
+
+---
+
+**K2. WebSocket 消息协议前后端一致性**
+
+检查目标：`web/bridge/web_prompt.py` 和 `web/bridge/web_ui.py` 发送的消息类型是否在前端 `MessageLog.vue` 和 `InputDispatcher.vue` 中均有对应的渲染/处理逻辑。
+
+检查方法：
+1. 列出 `web_ui.py` 中所有 `output` 消息的 `kind` 值
+2. 列出 `web_prompt.py` 中所有 `input_request` 消息的 `kind` 值
+3. 对比前端 `MessageLog.vue` 的 `v-if` 分支和 `InputDispatcher.vue` 的 `v-if` 分支
+
+| 后端 kind | 前端 MessageLog | 前端 InputDispatcher |
+|-----------|:-:|:-:|
+| info/success/warn/error/hint | | — |
+| banner | | — |
+| section | | — |
+| divider | | — |
+| progress | | — |
+| completion | | — |
+| refine_block | | — |
+| param_suggestions | 过滤到 ParamTable | — |
+| param_confirmed | | — |
+| braindump_intro | | — |
+| braindump_result | | — |
+| braindump_summary | | — |
+| name_candidates | | — |
+| choice | — | |
+| yes_no | — | |
+| single | — | |
+| multiline | — | |
+| int | — | |
+
+通过条件：后端发出的每种 kind 在前端均有对应渲染或有意过滤（如 `param_suggestions` 转到 `ParamTable`）
+
+---
+
+**K3. Bridge Session 生命周期**
+
+检查目标：`web/bridge/session.py` 的 Session 管理是否线程安全，无泄漏。
+
+检查方法：
+1. `SessionManager` 的 create/get/remove 是否有 `threading.Lock` 保护
+2. WebSocket 断开时是否调用 `session_manager.remove(session_id)` 清理
+3. pipeline 线程退出（正常/异常/cancel）时 session 是否被正确清理
+4. `session.cancelled` Event 是否在 cancel 时被 set，且 `web_prompt.py` 的阻塞等待中检查此 Event
+
+通过条件：创建/获取/删除均有锁保护；异常路径（pipeline 崩溃、WS 断开）均触发清理
+
+---
+
+**K4. REST API 数据正确性**
+
+检查目标：`web/routers/novels.py` 的 API 端点返回的数据结构与前端预期一致。
+
+检查方法：
+1. `GET /api/novels` 返回的列表项字段是否与 `HomeView.vue` 模板中使用的字段对应
+2. `GET /api/novels/{name}` 返回的 detail 字段是否与 `NovelDetailView.vue` 独立详情模式需要的字段对应（含 `world_data`、`outline`、`style_guide`、`chapters` 等，用于 JsonViewer 渲染）
+3. `GET /api/novels/{name}/chapter/{num}` 返回的文本内容是否正确读取文件
+4. `POST /api/suggest-names` 和 `POST /api/validate-name` 端点是否正常工作
+
+通过条件：API 返回字段与前端消费字段完全匹配，无前端使用了但 API 未返回的字段
+
+---
+
+**K5. 前端 store 消息过滤一致性**
+
+检查目标：`store/index.ts` 的 `outputMessages` computed 和 `NovelDetailView.vue` 的 `displayMessages` computed 过滤逻辑是否有意且一致。
+
+检查方法：
+1. `store.outputMessages` 是否只过滤 `type === 'output'`（不按 kind 过滤）
+2. `NovelDetailView.vue` 的 `displayMessages` 过滤了哪些 kind，每个过滤是否有合理理由
+3. 被过滤的 kind 是否在其他组件中有独立展示（如 `param_suggestions` → `ParamTable`）
+
+通过条件：过滤规则有明确注释说明理由；被过滤的消息类型在页面其他位置有消费点
+
 ---
 
 ## 三、验证报告输出格式
@@ -666,6 +758,9 @@
 | 新增或修改 config 参数 | `docs/parameters_and_changelog.md` 对应配置表 | 更新参数行 |
 | 新增 Agent 或 Phase | `README.md` 架构图 + 核心特性 | 同步更新 |
 | 新增或升级依赖 | `requirements.txt` + `README.md` 环境要求 | 同步更新 |
+| 新增或修改 Web 桥接函数 | `web/bridge/__init__.py` + `docs/system_reference.md` 第21章 | 同步 monkey-patch 列表和 WebSocket 协议文档 |
+| 新增或修改 WebSocket 消息类型 | 前端 `MessageLog.vue` / `InputDispatcher.vue` + `docs/system_reference.md` 第21章 | 前后端同时添加对应渲染/处理逻辑 |
+| 新增或修改 REST API 端点 | `web/routers/novels.py` + 前端 `useNovelApi.ts` | 接口契约前后端同步 |
 | 发现验证协议覆盖盲区 | `docs/verification_protocol.md` | 补充或修正验证项（J1 触发） |
 | 以上均无 | 无需更新 | 在报告末尾注明"文档已是最新，无需同步" |
 
@@ -673,5 +768,5 @@
 
 ---
 
-*最后验证执行时间：2026-05-22（含 #51-#56 修复验证）*
-*协议版本：1.2*
+*最后验证执行时间：2026-05-22（含 #108-#137 Web 端增强验证项补充）*
+*协议版本：1.4*

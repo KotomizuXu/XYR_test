@@ -80,9 +80,13 @@ class LLMClient:
         token_env = config["api"]["auth_token_env"]
         auth_token = os.environ.get(token_env, "")
         if not auth_token:
-            print(f"错误：未找到 API Token。请在项目根目录创建 .env 文件并设置 {token_env}。")
-            print(f"  cp .env.example .env")
-            print(f"  然后编辑 .env 填入你的真实 Token（在 https://open.bigmodel.cn/ 申请）")
+            msg = f"未找到 API Token。请设置环境变量 {token_env}。"
+            try:
+                from core.ui import error, hint
+                error(msg)
+                hint("cp .env.example .env 然后填入真实 Token（https://open.bigmodel.cn/ 申请）")
+            except ImportError:
+                print(f"错误：{msg}")
             sys.exit(1)
         self.client = anthropic.Anthropic(
             base_url=config["api"]["base_url"],

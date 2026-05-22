@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.pipeline import NovelPipeline, load_config
 from core.state_manager import StateManager
 from core.llm_client import LLMClient
-from core.name_generator import suggest_novel_names
+from core.name_generator import suggest_novel_names, sanitize_novel_name
 from core.prompt_utils import (
     prompt_single, prompt_multiline, prompt_choice, prompt_yes_no,
     UserAbort, is_interactive,
@@ -237,33 +237,6 @@ def _extract_negative_constraints(enriched_idea: str, style: str | None) -> str 
 # ---------------------------------------------------------------------------
 
 
-_INVALID_NAME_CHARS = set('\\/:*?"<>|')
-_WINDOWS_RESERVED_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-}
-_MAX_NAME_LENGTH = 64
-
-
-def _sanitize_novel_name(name: str) -> tuple[bool, str]:
-    """校验小说名是否可作为文件夹名。返回 (是否合法, 错误信息或合法名称)。"""
-    name = name.strip()
-    if not name:
-        return False, "小说名称不能为空"
-    if len(name) > _MAX_NAME_LENGTH:
-        return False, f"小说名称过长（>{_MAX_NAME_LENGTH} 字符），请使用更短的名字"
-    bad = [c for c in name if c in _INVALID_NAME_CHARS]
-    if bad:
-        return False, f"小说名称包含非法字符：{''.join(set(bad))}（不允许 \\ / : * ? \" < > |）"
-    if name.endswith(".") or name.endswith(" "):
-        return False, "小说名称不能以 '.' 或空格结尾（Windows 兼容性）"
-    base_name = name.split(".", 1)[0].upper()
-    if base_name in _WINDOWS_RESERVED_NAMES:
-        return False, f"「{name}」是 Windows 保留名，请换一个名字"
-    return True, name
-
-
 def _pick_novel_name(idea: str, style: str | None) -> str | None:
     """通过交互获取小说名。返回 None 表示用户取消。
 
@@ -277,7 +250,7 @@ def _pick_novel_name(idea: str, style: str | None) -> str | None:
 
     if not use_ai:
         try:
-            return prompt_single("请输入小说名称：", validator=_sanitize_novel_name)
+            return prompt_single("请输入小说名称：", validator=sanitize_novel_name)
         except UserAbort:
             return None
 
@@ -306,20 +279,20 @@ def _pick_novel_name(idea: str, style: str | None) -> str | None:
             continue
         if choice == "custom":
             try:
-                return prompt_single("请输入小说名称：", validator=_sanitize_novel_name)
+                return prompt_single("请输入小说名称：", validator=sanitize_novel_name)
             except UserAbort:
                 return None
 
         # cand_N → 取对应候选 + 校验
         idx = int(choice.split("_")[1]) - 1
         picked = candidates[idx]
-        ok, msg = _sanitize_novel_name(picked)
+        ok, msg = sanitize_novel_name(picked)
         if ok:
             return msg if isinstance(msg, str) and msg else picked
         # 候选名校验失败（极少见，如长度刚好超），提示让用户改
         ui.warn(f"AI 推荐的「{picked}」校验失败：{msg}。请手动调整或选其他。")
         try:
-            return prompt_single("请输入小说名称：", default=picked, validator=_sanitize_novel_name)
+            return prompt_single("请输入小说名称：", default=picked, validator=sanitize_novel_name)
         except UserAbort:
             return None
 

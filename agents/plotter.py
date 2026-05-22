@@ -3,6 +3,8 @@
 import json
 import logging
 
+from core import ui
+
 from agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ class PlotAgent(BaseAgent):
             end = min(start + BATCH_SIZE - 1, num_chapters)
             batch_num = (start - 1) // BATCH_SIZE + 1
             total_batches = (num_chapters + BATCH_SIZE - 1) // BATCH_SIZE
-            print(f"  [编剧] 生成第 {start}-{end} 章计划（{batch_num}/{total_batches}）...")
+            ui.info(f"[编剧] 生成第 {start}-{end} 章计划（{batch_num}/{total_batches}）...")
             existing_summaries = ""
             if all_plans:
                 summaries = [

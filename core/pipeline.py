@@ -22,6 +22,7 @@ from core.prompt_utils import (
 from core.refine_prompts import (
     REFINE_WORLD_PROMPT, REFINE_CHARACTER_PROMPT,
     REFINE_LOCATION_PROMPT, REFINE_OUTLINE_PROMPT,
+    REFINE_HOLISTIC_PROMPT,
     REFINE_REWRITE_DIRECTIVE,
 )
 from core.state_manager import ChapterState, NovelState, StateManager, atomic_write_json
@@ -55,7 +56,10 @@ class NovelPipeline:
 
         self._interrupted = False
         self._current_state = None
-        signal.signal(signal.SIGINT, self._handle_interrupt)
+        try:
+            signal.signal(signal.SIGINT, self._handle_interrupt)
+        except (ValueError, OSError):
+            pass  # 非主线程无法注册信号处理器（Web 模式后台线程）
 
     def _apply_style_temperatures(self, style_guide: dict):
         if not style_guide or "agent_temperatures" not in style_guide:
@@ -95,6 +99,14 @@ class NovelPipeline:
     def _checkpoint(self, state: NovelState, next_action: str) -> bool:
         """在重操作前保存状态并询问用户是否继续。返回 True 表示继续，False 表示暂停。"""
         self.state_mgr.save(state)
+        # Web 模式：自动继续，不弹确认框（有断点续写兜底）
+        try:
+            from web.bridge.web_prompt import get_current_session
+            if get_current_session() is not None:
+                ui.info(f"下一步：{next_action}")
+                return True
+        except ImportError:
+            pass
         ui.section("检查点", f"下一步：{next_action}", style="yellow")
         try:
             choice = prompt_choice(
@@ -185,16 +197,9 @@ class NovelPipeline:
         if self._interrupted:
             return
 
-        # Phase 1: Directing (增量生成 + 逐个确认)
+        # Phase 1: Directing (一次性生成 + 全量精修)
         if state.phase == "directing":
-            self._run_incremental_directing(state)
-
-        if self._interrupted:
-            return
-
-        # 向后兼容：旧 state.phase == "refining" 仍有预生成数据
-        if state.phase == "refining":
-            self._refine_director_output(state)
+            self._run_directing_holistic(state)
 
         if self._interrupted:
             return
@@ -233,9 +238,7 @@ class NovelPipeline:
             config_missing = not tracker._read_json("config.json")
             if missing or config_missing:
                 targets = list(missing) + (["config.json"] if config_missing else [])
-                ui.info(f"[追踪系统] 缺失追踪文件：{targets}，正在初始化（已存在的文件保持不变）...")
                 tracker.init_tracking(state.world_data, state.outline, state.chapter_plans, missing=targets)
-                ui.success("[追踪系统] 追踪数据已初始化（仅初始化缺失文件，保护已有数据）")
             # 始终应用 active_validation_level（即使追踪文件已存在，也要根据 strictness 同步生效）
             self._apply_validation_level(tracker)
 
@@ -351,6 +354,105 @@ class NovelPipeline:
         )
 
     # ── Incremental Directing (Phase 1) ──────────────────────────────────
+
+    # ── Holistic Directing (Phase 1) ───────────────────────────────────
+
+    def _run_directing_holistic(self, state: NovelState) -> None:
+        """Phase 1: 一次性生成世界观、角色、地点、大纲，全量精修确保一致性。"""
+        ui.banner("导演阶段", "一次性构建世界观、角色、地点和大纲")
+
+        # 兼容：增量流程断点恢复 — 剥离 planned 数据后走全量精修
+        if state.world_data:
+            state.world_data.pop("planned_cast", None)
+            state.world_data.pop("planned_locations", None)
+
+        # 已完成全量精修（断点续传）
+        if "holistic" in state.refined_blocks:
+            ui.hint("[恢复] 导演阶段已完成全量精修，跳过")
+            self._advance_to_plotting(state)
+            return
+
+        # Step 1: 一次性生成（如果还没有数据）
+        if not state.world_data:
+            if not self._checkpoint(state, "一次性生成世界观、角色、地点和大纲（耗时较长）"):
+                return
+            ui.info("[导演] 正在一次生成全部设定...")
+            result = self.director.run(
+                state.story_idea, state.total_chapters, style_guide=state.style_guide)
+            if not isinstance(result, dict) or not result:
+                ui.error("[导演] 生成失败，请重试")
+                return
+            state.world_data = result
+            state.outline = result.pop("outline", {})
+            self.state_mgr.save(state)
+
+        # Step 2: 全量精修
+        full_json = self._merge_director_output(state)
+        context = self._build_holistic_context(state)
+
+        refined = self._refine_block(
+            label="全部设定（世界观、角色、地点、大纲）",
+            initial=full_json,
+            system_prompt=REFINE_HOLISTIC_PROMPT,
+            context_summary=context,
+        )
+        if self._interrupted:
+            return
+
+        # Step 3: 拆回 state
+        self._split_director_output(state, refined)
+        state.refined_blocks.append("holistic")
+        self._advance_to_plotting(state)
+
+    def _merge_director_output(self, state: NovelState) -> dict:
+        """将 world_data + outline 合并为全量精修用的单一 JSON。"""
+        wd = state.world_data or {}
+        merged = {
+            "world_data": {k: v for k, v in wd.items()
+                           if k not in ("characters", "locations", "outline")},
+            "characters": wd.get("characters", []),
+            "locations": wd.get("locations", []),
+            "outline": state.outline or {},
+        }
+        return merged
+
+    def _split_director_output(self, state: NovelState, merged: dict) -> None:
+        """将全量精修结果拆回 state.world_data 和 state.outline。"""
+        if not isinstance(merged, dict):
+            return
+        outline = merged.pop("outline", state.outline or {})
+        characters = merged.pop("characters", state.world_data.get("characters", []))
+        locations = merged.pop("locations", state.world_data.get("locations", []))
+        world_part = merged.get("world_data", merged)
+        state.world_data = {**world_part, "characters": characters, "locations": locations}
+        state.outline = outline
+        self.state_mgr.save(state)
+
+    def _build_holistic_context(self, state: NovelState) -> str:
+        """为全量精修构建上下文（故事火花 + 风格偏好）。"""
+        parts: list[str] = []
+        if state.story_idea:
+            idea = state.story_idea.replace("\n", " ")
+            parts.append(f"## 故事火花\n{idea[:1000]}")
+        if state.style_description:
+            parts.append(f"## 风格偏好\n{state.style_description}")
+        return "\n\n".join(parts)
+
+    def _advance_to_plotting(self, state: NovelState) -> None:
+        """导演阶段收尾：持久化 JSON 文件，推进到 plotting。"""
+        novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
+        wd = state.world_data or {}
+        world_for_disk = {k: v for k, v in wd.items() if k not in ("characters", "locations")}
+        world_for_disk["characters"] = wd.get("characters", [])
+        world_for_disk["locations"] = wd.get("locations", [])
+        atomic_write_json(novel_dir / "world.json", world_for_disk)
+        atomic_write_json(novel_dir / "outline.json", state.outline)
+
+        state.phase = "plotting"
+        self.state_mgr.save(state)
+        ui.success("[导演] 全部确认，进入剧情拆章")
+
+    # ── Incremental Directing (Phase 1, 已弃用，保留兼容) ────────────────
 
     def _run_incremental_directing(self, state: NovelState) -> None:
         """Phase 1: 按层级增量生成世界观、角色、地点、大纲，每个 piece 生成后精修确认。"""
@@ -878,9 +980,9 @@ class NovelPipeline:
         if not all_items:
             return
 
-        print("  可选操作：输入编号退休（不再追踪）对应元素，直接回车跳过：")
+        ui.hint("可选操作：输入编号退休（不再追踪）对应元素，直接回车跳过：")
         for idx, (_, _, desc) in enumerate(all_items, 1):
-            print(f"    {idx}. 退休 {desc}")
+            ui.info(f"  {idx}. 退休 {desc}")
         try:
             choice = prompt_single("  > ")
         except UserAbort:
@@ -890,7 +992,7 @@ class NovelPipeline:
             if 0 <= idx < len(all_items):
                 etype, name, desc = all_items[idx]
                 tracker.retire_element(etype, name)
-                print(f"  已退休：{desc}")
+                ui.success(f"已退休：{desc}")
 
     def _apply_validation_level(self, tracker: Tracker) -> None:
         """Set validation level based on strictness config."""
@@ -901,14 +1003,14 @@ class NovelPipeline:
         tracker._write_json("validation_rules.json", rules)
 
     def _report_forgotten(self, forgotten: dict) -> None:
-        print("  [遗忘检测] 发现以下元素需要关注：")
+        ui.warn("[遗忘检测] 发现以下元素需要关注：")
         for char in forgotten.get("characters", []):
-            print(f"    ⚠️ 角色「{char['name']}」已{char['chapters_absent']}章未出场（上次：第{char['last_seen']}章）")
+            ui.warn(f"  角色「{char['name']}」已{char['chapters_absent']}章未出场（上次：第{char['last_seen']}章）")
         for plotline in forgotten.get("plotlines", []):
-            print(f"    ⚠️ 支线「{plotline['name']}」停滞中（状态：{plotline.get('status', '?')}）")
+            ui.warn(f"  支线「{plotline['name']}」停滞中（状态：{plotline.get('status', '?')}）")
         for fs in forgotten.get("foreshadowing", []):
             content = fs.get('content', '')
-            print(f"    ⚠️ 伏笔「{content[:60]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
+            ui.warn(f"  伏笔「{content[:60]}...」已{fs['chapters_since']}章未回收（埋设于第{fs['planted_chapter']}章）")
 
     def _build_forgotten_context(self, forgotten: dict) -> str:
         """Build context string from forgotten elements for writer awareness."""
@@ -940,28 +1042,28 @@ class NovelPipeline:
         }
         missing = [k for k, v in checks.items() if not v]
         if missing:
-            print(f"  [写前检查] ⚠️ 缺失数据：{missing}，继续写作但可能影响一致性")
+            ui.warn(f"[写前检查] 缺失数据：{missing}，继续写作但可能影响一致性")
 
         # Report validation level
         if checks["validation_rules"]:
             strictness = tracker._get_strictness()
-            print(f"  [写前检查] 验证模式：{strictness}")
+            ui.hint(f"[写前检查] 验证模式：{strictness}")
 
         # Extract key principle summaries for writer context
         if checks["style_guide"] and state.style_guide:
             style_name = state.style_guide.get("style_name", "")
             tone = state.style_guide.get("tone", {}).get("overall", "")
             if style_name:
-                print(f"  [写前检查] 风格：{style_name}")
+                ui.hint(f"[写前检查] 风格：{style_name}")
             reqs = state.style_guide.get("requirements", {}).get("detected", [])
             if reqs:
-                print(f"  [写前检查] 写作规范：{', '.join(reqs)}")
+                ui.hint(f"[写前检查] 写作规范：{', '.join(reqs)}")
             dealbreakers = state.style_guide.get("review", {}).get("dealbreakers", [])
             if dealbreakers:
-                print(f"  [写前检查] 红线：{', '.join(str(d) for d in dealbreakers[:5])}")
+                ui.warn(f"[写前检查] 红线：{', '.join(str(d) for d in dealbreakers[:5])}")
             style_rules = state.style_guide.get("style_presets", {}).get("style_rules", [])
             if style_rules:
-                print(f"  [写前检查] 文风要点：{'; '.join(str(r) for r in style_rules[:5])}")
+                ui.hint(f"[写前检查] 文风要点：{'; '.join(str(r) for r in style_rules[:5])}")
 
         # Extract key character states
         char_state = tracker._read_json("character_state.json")
@@ -970,7 +1072,7 @@ class NovelPipeline:
             if protag.get("name"):
                 phase = protag.get("development", {}).get("currentPhase", "")
                 loc = protag.get("currentStatus", {}).get("location", "")
-                print(f"  [写前检查] 主角{protag['name']}：阶段={phase}，位置={loc or '未知'}")
+                ui.hint(f"[写前检查] 主角{protag['name']}：阶段={phase}，位置={loc or '未知'}")
 
     def _write_chapters(self, state: NovelState) -> None:
         # I2: review-rewrite 循环硬上限。即便审稿一直 reject，也最多重写 max_retries 次后接受当前版本
@@ -1224,7 +1326,7 @@ class NovelPipeline:
             state.current_chapter = i + 1
             self.state_mgr.save(state)
 
-        print(f"  [编辑] 全部章节润色完成")
+        ui.success("[编辑] 全部章节润色完成")
 
     def _combine_final(self, state: NovelState) -> None:
         dirs = self.state_mgr.ensure_dirs(state.novel_name)
@@ -1253,43 +1355,42 @@ class NovelPipeline:
 
         full_path = final_dir / f"{state.novel_name}_全文.txt"
         full_path.write_text("".join(combined_parts), encoding="utf-8")
-        print(f"  全文已合并保存至：{full_path}")
+        ui.success(f"全文已合并保存至：{full_path}")
 
     # ── Revise flow ──────────────────────────────────────────────
 
     def revise_chapter(self, novel_name: str, chapter_number: int) -> None:
         state = self.state_mgr.load(novel_name)
         if state is None:
-            print(f"未找到小说《{novel_name}》，请检查名称")
+            ui.error(f"未找到小说《{novel_name}》，请检查名称")
             return
 
         if state.phase not in ("editing", "complete"):
-            print(f"小说《{novel_name}》尚未完成主写作流程（当前阶段：{state.phase}），请先用 'continue' 完成创作再修订")
+            ui.error(f"小说《{novel_name}》尚未完成主写作流程（当前阶段：{state.phase}），请先用 'continue' 完成创作再修订")
             return
 
         ch = self._find_chapter(state, chapter_number)
         if ch is None:
-            print(f"第{chapter_number}章不存在")
+            ui.error(f"第{chapter_number}章不存在")
             return
 
         draft_path = Path(ch.edited_path) if ch.edited_path else (Path(ch.draft_path) if ch.draft_path else None)
         if not draft_path or not draft_path.exists():
-            print(f"第{chapter_number}章尚未完成，无法修订")
+            ui.error(f"第{chapter_number}章尚未完成，无法修订")
             return
 
         draft = draft_path.read_text(encoding="utf-8")
 
-        print(f"\n--- 修订第{chapter_number}章：「{ch.title}」---")
-        print(f"当前版本：{len(draft)} 字")
+        ui.section(f"修订第{chapter_number}章", f"「{ch.title}」· 当前版本 {len(draft)} 字", style="bright_cyan")
 
         try:
             user_feedback = self._collect_user_feedback()
         except (KeyboardInterrupt, EOFError):
-            print("\n已取消输入，退出修订")
+            ui.hint("已取消输入，退出修订")
             return
 
         if not user_feedback:
-            print("未输入修改意见，退出修订")
+            ui.hint("未输入修改意见，退出修订")
             return
 
         self._apply_style_temperatures(state.style_guide)
@@ -1301,7 +1402,7 @@ class NovelPipeline:
             idx = chapter_number - 1
             chapter_plan = state.chapter_plans[idx] if state.chapter_plans and 0 <= idx < len(state.chapter_plans) else {}
 
-            print("  [修订顾问] 正在分析修改意见...")
+            ui.info("[修订顾问] 正在分析修改意见...")
             ideas = self.critic.run(
                 chapter_text=draft,
                 user_feedback=user_feedback,
@@ -1317,13 +1418,13 @@ class NovelPipeline:
             try:
                 selected = self._select_idea(ideas, user_feedback)
             except (KeyboardInterrupt, EOFError):
-                print("\n已取消选择，退出修订")
+                ui.hint("已取消选择，退出修订")
                 return
 
             self._execute_revise(state, ch, draft, selected, user_feedback, chapter_plan, tracking_ctx, tracker)
         except Exception as e:
             logger.error(f"Revise error: {e}")
-            print(f"\n修订出错：{e}")
+            ui.error(f"修订出错：{e}")
             raise
 
     def _execute_revise(self, state, ch, draft, selected_idea, user_feedback, chapter_plan, tracking_ctx, tracker):
@@ -1349,7 +1450,7 @@ class NovelPipeline:
             feedback = f"## 修改要求\n{selected_idea}"
 
         # Step 1: Writer rewrite
-        print("  [作家] 正在根据修改思路修订...")
+        ui.info("[作家] 正在根据修改思路修订...")
         revised = self.writer.rewrite(
             draft, feedback, chapter_plan, running_ctx,
             style_guide=state.style_guide,
@@ -1357,11 +1458,11 @@ class NovelPipeline:
         )
 
         if self._interrupted:
-            print("  已中断，修订未保存")
+            ui.hint("已中断，修订未保存")
             return
 
         # Step 2: Review
-        print("  [审核] 正在审核修订版本...")
+        ui.info("[审核] 正在审核修订版本...")
         review = self.reviewer.run(
             revised, chapter_plan, state.world_data,
             style_guide=state.style_guide,
@@ -1369,14 +1470,14 @@ class NovelPipeline:
         )
 
         if self._interrupted:
-            print("  已中断，修订未保存")
+            ui.hint("已中断，修订未保存")
             return
 
         # Step 3: Retry once if major issues
         if not review.get("approved", False):
             major = [iss for iss in review.get("issues", []) if iss.get("severity") == "major"]
             if major:
-                print(f"  [审核] 发现 {len(major)} 个主要问题，再次修订...")
+                ui.warn(f"[审核] 发现 {len(major)} 个主要问题，再次修订...")
                 additional = "\n".join(
                     f"- [{iss.get('severity')}] {iss.get('description')} → {iss.get('suggestion')}"
                     for iss in review.get("issues", [])
@@ -1398,11 +1499,11 @@ class NovelPipeline:
                 )
 
         if self._interrupted:
-            print("  已中断，修订未保存")
+            ui.hint("已中断，修订未保存")
             return
 
         # Step 4: Editor polish
-        print("  [编辑] 正在润色修订版本...")
+        ui.info("[编辑] 正在润色修订版本...")
         prev_ending, next_opening = self._get_adjacent_text(state, ch_num)
         final_text = self.editor.run(
             revised, ch_num, prev_ending, next_opening,
@@ -1411,15 +1512,15 @@ class NovelPipeline:
         )
 
         # Step 5: User confirmation
-        print(f"\n修订完成，字数变化：{len(draft)} → {len(final_text)}")
+        ui.success(f"修订完成，字数变化：{len(draft)} → {len(final_text)}")
         try:
             accept = prompt_yes_no("是否接受此次修订？", default=True)
         except UserAbort:
-            print("\n  已中断，修订未保存")
+            ui.hint("已中断，修订未保存")
             return
 
         if not accept:
-            print("  已放弃修订，保留原版本")
+            ui.hint("已放弃修订，保留原版本")
             return
 
         # Programmatic fixes on revised text
@@ -1428,25 +1529,25 @@ class NovelPipeline:
         if fix_result["fixes"]["applied"]:
             final_text = fix_result["text"]
             fixed = True
-            print(f"  [追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
+            ui.hint(f"[追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
 
         fixed_draft, banned_changes = tracker.auto_fix_banned_words(final_text, state.style_guide)
         if banned_changes:
             final_text = fixed_draft
             fixed = True
-            print(f"  [禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
+            ui.hint(f"[禁用词] 自动修正 {len(banned_changes)} 处：{banned_changes[:5]}")
 
         cliche_issues = tracker.check_cliches(final_text)
         if cliche_issues:
-            print(f"  [陈词滥调] 发现 {len(cliche_issues)} 处：{cliche_issues[:3]}")
+            ui.warn(f"[陈词滥调] 发现 {len(cliche_issues)} 处：{cliche_issues[:3]}")
 
         sentence_issues = tracker.check_sentence_patterns(final_text)
         if sentence_issues:
-            print(f"  [句式检查] {sentence_issues[:3]}")
+            ui.hint(f"[句式检查] {sentence_issues[:3]}")
 
         abstract_issues = tracker.check_abstract_nouns(final_text)
         if abstract_issues:
-            print(f"  [抽象名词] 发现 {len(abstract_issues)} 处：{abstract_issues[:5]}")
+            ui.hint(f"[抽象名词] 发现 {len(abstract_issues)} 处：{abstract_issues[:5]}")
 
         # Save revised draft
         dirs = self.state_mgr.ensure_dirs(state.novel_name)
@@ -1497,7 +1598,7 @@ class NovelPipeline:
         tracker.log_changes_csv(ch_num, before, after, source="revise")
 
         self.state_mgr.save(state)
-        print("  修订已保存")
+        ui.success("修订已保存")
 
     def _collect_user_feedback(self) -> str:
         try:
@@ -1507,21 +1608,25 @@ class NovelPipeline:
 
     def _select_idea(self, ideas: list[dict], user_feedback: str):
         if not ideas:
-            print("未能生成修改思路，将直接使用您的意见进行修订。")
+            ui.warn("未能生成修改思路，将直接使用您的意见进行修订。")
             return user_feedback
 
-        print("\n以下是几个具体的修改思路：\n")
+        ui.section("修改思路", "请选择一个方向，或输入自定义修改方向", style="yellow")
         for i, idea in enumerate(ideas, 1):
-            print(f"  {i}. {idea.get('title', '思路')}")
+            title = idea.get('title', '思路')
             desc = idea.get('description', '')
-            print(f"     {desc[:200]}{'...' if len(desc) > 200 else ''}")
-            print(f"     预期效果：{idea.get('expected_effect', '')[:120]}")
+            effect = idea.get('expected_effect', '')
             notes = idea.get('consistency_notes', '')
+            lines = [f"{i}. {title}"]
+            if desc:
+                lines.append(f"   {desc[:200]}{'...' if len(desc) > 200 else ''}")
+            if effect:
+                lines.append(f"   预期效果：{effect[:120]}")
             if notes and notes != '无':
-                print(f"     一致性提醒：{notes[:120]}")
-            print()
+                lines.append(f"   一致性提醒：{notes[:120]}")
+            ui.info("\n".join(lines))
 
-        print(f"  0. 不使用以上思路，直接用我的原始意见")
+        ui.hint("0. 不使用以上思路，直接用我的原始意见")
 
         try:
             choice = prompt_single("\n请选择（输入编号或直接输入自定义修改方向）：")
@@ -1532,12 +1637,12 @@ class NovelPipeline:
             idx = int(choice)
             if 1 <= idx <= len(ideas):
                 selected = ideas[idx - 1]
-                print(f"\n已选择：{selected.get('title', '')}")
+                ui.success(f"已选择：{selected.get('title', '')}")
                 return selected
             elif idx == 0:
                 return user_feedback
             else:
-                print("编号无效，使用原始意见")
+                ui.warn("编号无效，使用原始意见")
                 return user_feedback
         elif choice:
             return f"自定义修改方向：{choice}\n原始意见：{user_feedback}"

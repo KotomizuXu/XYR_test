@@ -282,11 +282,18 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | Braindump rewrite 反上下文 | rewrite 分支把 `prev_result` 拼到 user_msg "之前生成的{label}（用户不满意，请勿沿用此方向）" | main.py `_braindump_section` |
 | Writer rewrite 温度 | `min(self._temperature() + 0.15, 0.9)`（基于初稿温度上调） | agents/writer.py `rewrite` |
 | Writer rewrite system 增强 | `_build_system_prompt(..., is_rewrite=True)` 在 system 尾部追加"## 重写专项要求"段（强调实质性改写，不能字面微调） | agents/writer.py |
-| 精修阶段 system_prompt | 4 个常量（world/character/location/outline） + `REFINE_REWRITE_DIRECTIVE`（rewrite 时拼接到 system） | core/refine_prompts.py |
+| 精修阶段 system_prompt | 5 个常量：4 个 per-block（world/character/location/outline）+ `REFINE_HOLISTIC_PROMPT`（全量精修）+ `REFINE_REWRITE_DIRECTIVE`（rewrite 时拼接到 system） | core/refine_prompts.py |
+| 精修策略 | 全量精修（holistic）：每次调整将完整 director JSON（world_data + characters + locations + outline）发送给 LLM，确保跨 block 一致性 | core/pipeline.py `_run_directing_holistic` |
 | 精修 LLM 温度 | `0.7`（初版/调整）/ `0.9`（rewrite） | core/pipeline.py `_llm_refine` |
 | 精修 rewrite 反上下文 | rewrite=True 时 user_msg 含"之前的版本（用户不满意，请勿沿用此方向）" + previous JSON | core/pipeline.py `_llm_refine` |
 | 精修 block 类型 | `world` / `character:<name>` / `location:<name>` / `outline` | core/pipeline.py `_refine_*` |
 | 精修上下文裁剪 | 故事火花 600 字 / 世界观 800 字 / 大纲 600 字 | core/pipeline.py `_build_refine_context` |
+| Web 服务端口 | `0.0.0.0:8000`（uvicorn 默认） | web_main.py |
+| WebSocket 路径 | `/ws`（双向 JSON 协议：output / input_request / session_started / session_ended） | web/app.py |
+| REST API 前缀 | `/api`（novels 列表/详情/章节内容） | web/routers/novels.py |
+| 前端静态文件 | `frontend/dist/`（Vue3 SPA 构建产物，由 FastAPI 直接服务） | web/app.py |
+| 桥接层注入时机 | `install_web_bridge()` 必须在 `import core.pipeline` 之前执行 | web/bridge/__init__.py |
+| 桥接层线程隔离 | `threading.local()` 绑定当前线程的 BridgeSession | web/bridge/web_prompt.py |
 
 ---
 
@@ -662,7 +669,13 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #98 D3 | 映射 | _GENRE_STRICTNESS 未覆盖"都市"题材 → 添加 `"都市": "flexible"` | `core/pipeline.py` |
 | #99 J1 | 协议 | 验证协议 B3 表格未覆盖新增字段 + 缺 prompt schema 消费检查项 → 添加 J2 检查项 + 更新 B3/A3/F1 表格 | `docs/verification_protocol.md` |
 
-### 2026-05-22 Director 增量生成重构
+### 2026-05-22 Director 精修策略改为全量（holistic）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|---------|
+| #106 | 架构 | 增量生成精修存在"改后不同步前"问题：精修角色B时无法反向更新已确认的角色A/世界观；全量反向同步开销等同于一次性生成 → 恢复一次性生成（`director.run()`）+ 全量精修（`_run_directing_holistic`）：每次调整发送完整 JSON（world_data + characters + locations + outline），LLM 输出同结构完整 JSON | `core/pipeline.py`、`core/refine_prompts.py`（新增 `REFINE_HOLISTIC_PROMPT`） |
+
+### 2026-05-22 Director 增量生成重构（#100-#105，已由 #106 取代）
 
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|---------|
@@ -675,5 +688,104 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 
 跳过项（用户决策）：A0 自动检测题材 / B0 角色冲突矩阵 / C0 群戏调度 / I3 章节字数日志 / I4 写作日志格式 / J1 词汇丰富度自动检测 / J3 主题贯穿度自动检测。
 
+### 2026-05-22 Web 前端模式（#107）
 
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|---------|
+| #107 | 架构 | CLI 界面下 Director 全量精修 JSON 可读性差 + 用户交互不便 → 新增 FastAPI + Vue3 SPA Web 前端，覆盖 new/continue/revise/status 全流程 | `web/`（新增）、`frontend/`（新增）、`web_main.py`（新增） |
 
+架构要点：
+- 桥接层（`web/bridge/`）通过 monkey-patch 替换 `core.prompt_utils` 和 `core.ui`，pipeline.py 无需修改
+- pipeline 在后台线程运行，通过 `queue.Queue` 与 WebSocket 双向通信
+- 前端使用 Vue3 + Naive UI（暗色主题 + 绿色强调），JSON 用 Tab 分页展示
+- CLI（`main.py`）和 Web（`web_main.py`）双入口共存，互不影响
+
+### 2026-05-22 Web 输入组件样式修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #108 | 轻微 | `PromptInt.vue` 的 `n-input-number` 与 `n-button` 无 flex 布局，垂直方向错位 | `frontend/src/components/interaction/PromptInt.vue`（`.input-row { display: flex; align-items: center; gap: 8px }`） |
+| #109 | 轻微 | `web_prompt_int` 传入的 message 带 CLI 前导空格（`"  总章数..."`），Web 端显示不协调 | `web/bridge/web_prompt.py` `web_prompt_int`（`message.lstrip()`） |
+
+### 2026-05-22 Web 端流程补齐（AI 起名 + 校验 + 继续创作）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #110 | 功能 | Web 端新建小说缺少 AI 起名功能（CLI 有 `_pick_novel_name`），留空直接变 "untitled" | `web/routers/novels.py`（新增 `POST /api/suggest-names`）、`frontend/src/views/NewNovelView.vue`（AI 起名按钮 + 候选展示） |
+| #111 | 功能 | Web 端缺少小说名安全校验（CLI 有 `_sanitize_novel_name`） | `core/name_generator.py`（移入公共函数 `sanitize_novel_name`）、`web/routers/novels.py`（新增 `POST /api/validate-name`）、`frontend/src/views/NewNovelView.vue`（前端校验） |
+| #112 | 功能 | Web 端缺少"继续创作"入口（CLI 有 `cmd_continue`，后端 WebSocket 已支持 `mode == "continue"`，但前端无 UI） | `frontend/src/views/ContinueView.vue`（新建）、`frontend/src/router/index.ts`（`/continue` 路由）、`frontend/src/components/layout/AppHeader.vue`（导航按钮） |
+
+架构变更：
+- `_sanitize_novel_name` + 相关常量从 `main.py` 移至 `core/name_generator.py`（公共函数 `sanitize_novel_name`），`main.py` 改为导入
+
+### 2026-05-22 NovelDetailView 独立详情模式
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #113 | 体验 | 从首页点击小说卡片进入 `/novel/:name`，NovelDetailView 只有会话模式，无 WebSocket 连接时显示"未连接"且无任何内容 | `frontend/src/views/NovelDetailView.vue` — 新增独立详情模式：通过 REST API 获取小说详情，展示基本信息/故事灵感/章节列表，根据阶段显示"继续创作"或"修订章节"操作按钮；会话模式仅在嵌入新建/继续/修订流程时激活 |
+| #114 | 体验 | 独立详情页内容超出视口无滚动条，长文案和章节列表无法完整查看 | `frontend/src/App.vue` — `.app-layout` 改为 `height:100vh;overflow:hidden` 固定视口，`.app-main` 加 `overflow-y:auto` 独立滚动 |
+| #115 | 体验 | 独立详情页所有阶段信息挤在一起，可读性差 | `frontend/src/views/NovelDetailView.vue` — 改为 `n-tabs` 分阶段展示（风格分析/参数确认/导演阶段/剧情拆章/章节进度/完成），当前阶段可操作，过去阶段只读展示，未来阶段置灰禁用 |
+| #116 | 体验 | 写作和润色分两个 Tab 但操作同一批章节，来回切换不便 | `frontend/src/views/NovelDetailView.vue` — 合并为"章节进度"Tab，每章展示完整子阶段流水线 `草稿→审核→追踪→润色`，已完成步骤标绿 ✓，未完成步骤置灰；`PHASE_ORDER` 同步移除 `editing`；`normalizePhase` 将 `editing` 映射到 `writing`、`refining` 映射到 `directing`，确保 Tab 激活和状态判断正确 |
+| #117 | 体验 | 从首页点击小说卡片进入详情页看不到 Tab，始终显示"未连接"会话视图 | `frontend/src/views/NovelDetailView.vue` — 独立详情模式判断条件从 `isStandalone && !hasSession` 改为仅 `isStandalone`（只看路由是否有 `:name` 参数），避免 store 残留旧会话数据导致 Tab 视图被跳过 |
+| #118 | 体验 | 新建小说/继续创作/修订时只显示平铺消息流，无法按阶段查看进度 | `frontend/src/views/NovelDetailView.vue` — 统一为 Tab 视图：session 模式也展示分阶段 Tab，通过 `novelName` prop + 定时 REST API 刷新获取已完成阶段数据；当前阶段 Tab 下方嵌入实时消息流+输入组件；父组件 `NewNovelView`/`ContinueView`/`ReviseView` 传入 `novelName` prop |
+| #119 | 体验 | 实时日志占位过多，Tab 数据和日志上下堆叠不便查看 | `frontend/src/views/NovelDetailView.vue` — 改为左右布局：左侧 14 列 Tab（阶段数据），右侧 10 列实时日志+进度条+输入组件；独立详情模式（无会话）Tab 占满 24 列 |
+
+### 2026-05-22 统一用户行为路径（消除冗余导航）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #120 | 体验 | 继续创作/修订章节需要经过额外选择页面，用户从详情页点按钮→跳转中间页→重新选择同一小说→再开始，路径冗余 | `frontend/src/views/NovelDetailView.vue` — 统一为"点进即操作"：未完成小说在页面顶部显示"继续创作"CTA 按钮，直接在详情页内发起 WebSocket 会话；已完成小说在"完成"Tab 内直接展示章节列表+每章"修订"按钮，点击即启动修订会话 |
+| #121 | 体验 | AppHeader 同时存在"首页""继续创作""修订""新建小说"四个导航，"继续创作"和"修订"与详情页内操作重复 | `frontend/src/components/layout/AppHeader.vue` — 移除"继续创作"和"修订"导航按钮，仅保留"首页"和"新建小说" |
+| #122 | 体验 | ContinueView/ReviseView 作为独立页面存在，用户需手动选择小说再开始，与详情页内的直接操作形成两条冗余路径 | `frontend/src/views/ContinueView.vue`、`frontend/src/views/ReviseView.vue` — 改为小说列表入口，点击"进入"跳转到 `/novel/:name` 详情页，由详情页统一承载继续/修订操作 |
+
+架构变更：
+- NovelDetailView 成为唯一操作入口：独立详情模式自带"继续创作"（未完成）和"修订"（已完成）内联操作
+- ContinueView/ReviseView 降级为小说列表入口，不再包含 WebSocket 会话逻辑
+
+### 2026-05-22 表单必填 + Web 检查点自动继续 + 取消按钮移除
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #123 | 体验 | 新建小说时小说名称可留空，提交后变成 "untitled"，用户不可控 | `frontend/src/views/NewNovelView.vue` — 小说名称改为必填字段（`required`），提交按钮在名称为空时禁用，不再 fallback 到 "untitled" |
+| #124 | 体验 | Web 模式下每个阶段之间弹出"保存并退出"确认框（CLI 设计），打断自动化流程，且已有断点续写兜底 | `core/pipeline.py` `_checkpoint` — 检测 Web session（`get_current_session()`），有则自动保存并继续，不弹确认框；CLI 行为不变 |
+| #125 | 体验 | "终止流程"按钮只在等待用户输入时生效（`web_prompt.py` 的 cancel 检查），LLM 调用期间（最长 300s）无法取消，给用户虚假预期 | `frontend/src/views/NovelDetailView.vue` — 移除"终止流程"按钮，流程结束后显示"继续创作"（未完成）或"返回首页" |
+
+### 2026-05-22 修订流程 Web 兼容修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #126 | 严重 | `revise_chapter` 全流程使用 `print()` 输出而非 `ui.*`，Web bridge 无法拦截，前端看不到任何修订进度和状态信息 | `core/pipeline.py` `revise_chapter` / `_execute_revise` / `_select_idea` — 全部 `print()` 替换为 `ui.info/warn/success/hint/error/section`，CLI 和 Web 端均可正常显示 |
+
+### 2026-05-22 全量清除 Web 不可见 print() 输出
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #127 | 严重 | `_pre_write_check()` 7 处 `print()`（缺失数据警告、红线约束、风格信息、主角状态），每章写前执行，Web 端完全不可见 | `core/pipeline.py` — 替换为 `ui.warn/hint` |
+| #128 | 严重 | `_report_forgotten()` 4 处 `print()`（角色失踪、支线停滞、伏笔未回收），遗忘检测信息 Web 端不可见 | `core/pipeline.py` — 替换为 `ui.warn` |
+| #129 | 严重 | `_handle_retire()` 3 处 `print()`（退休菜单、选项列表、确认），用户收到无上下文的输入框 | `core/pipeline.py` — 替换为 `ui.hint/info/success` |
+| #130 | 中等 | `_edit_chapters()` / `_combine_final()` 各 1 处 `print()`（润色完成、全文保存路径），里程碑信息 Web 端不可见 | `core/pipeline.py` — 替换为 `ui.success` |
+| #131 | 中等 | `Plotter.run()` 1 处 `print()`（分批生成进度），多章节小说规划时 Web 端无进度反馈 | `agents/plotter.py` — 新增 `from core import ui`，替换为 `ui.info` |
+| #132 | 中等 | `LLMClient.__init__()` 3 处 `print()`（API Token 缺失），进程直接 `sys.exit(1)`，Web 端只看到断连无错误信息 | `core/llm_client.py` — 改为先调 `ui.error/hint`（让 bridge 转发）再 exit |
+
+### 2026-05-22 JSON 展示改为易读格式
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #133 | 体验 | 世界观、大纲、风格指南、refine_block 等数据全部以 `JSON.stringify` 原始代码块展示，用户需要自己解析 JSON 结构 | 新建 `frontend/src/components/display/JsonViewer.vue` — 通用易读 JSON 展示组件，根据数据类型智能选择渲染方式：概要用 `n-descriptions` 键值对，嵌套列表（角色/势力/历史）用 `n-list` 卡片，短数组用 `n-tag` 横排，原始 JSON 折叠兜底 |
+| #134 | 体验 | NovelDetailView 风格分析 Tab 手动提取 3 个字段 + 折叠原始 JSON，其余大量风格信息不可读 | `frontend/src/views/NovelDetailView.vue` — 替换为 `JsonViewer type="style"`，自动提取 tone/pacing/plot/character/worldbuilding/review/editing 各子维度 |
+| #135 | 体验 | NovelDetailView 导演阶段 Tab 世界观和大纲直接展示原始 JSON | `frontend/src/views/NovelDetailView.vue` — 替换为 `JsonViewer type="world"` / `type="outline"`，世界观展示名称/基调/规则/角色卡片/地点标签/势力列表/历史事件/日常生活 |
+| #136 | 体验 | MessageLog 中 refine_block 内容以原始 JSON 展示 | `frontend/src/components/display/MessageLog.vue` — 替换为 `JsonViewer` |
+| #137 | 体验 | RefineBlockViewer 5 个 tab 全部展示原始 JSON | `frontend/src/components/display/RefineBlockViewer.vue` — 替换为 `JsonViewer`，world/outline tab 自动使用对应模板 |
+
+架构变更：
+- 新增通用组件 `JsonViewer.vue`，支持 `world`/`outline`/`style`/`auto` 四种渲染模板
+- 模板逻辑对齐 `core/context_manager.py` 的 `_condense_world` / `_condense_outline` 字段提取
+
+### 2026-05-22 JsonViewer 完全重写
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #138 | 严重 | JsonViewer 世界观模板未解析 holistic directing 嵌套结构（`data.world`），导致世界观完全不显示 | `JsonViewer.vue` — 新增 `worldObj` computed 解析 `data.world` 嵌套；`charsList` computed 兼容 `data.characters` 和 `data.world.characters` |
+| #139 | 严重 | 角色展示将 30+ 复杂嵌套字段（appearance/abilities/background/growth_plan/voice）平铺为扁平 key-value，字段堆叠不可读 | `JsonViewer.vue` — 角色改为 `n-collapse` 折叠面板：主层展示 personality/motivation/arc/fatal_flaw/aliases，嵌套折叠展示 appearance/abilities/background/growth_plan/voice 各子维度（`flattenObj()` 递归展开） |
+| #140 | 中等 | 世界观地点只显示名称标签，缺少 description/climate/terrain；势力缺少 key_figures；历史缺少 cause/result | `JsonViewer.vue` — locations 改为 `n-list` + `n-thing` 卡片（含 climate/terrain 标签）；factions 增加 key_figures 标签；history 展示 cause + result |
+| #141 | 中等 | 整体样式错位：子标题不统一、descriptions 嵌套层级不一致 | `JsonViewer.vue` — 统一 `.jv-sub-title` 类 + 间距；所有子区域使用一致的 `n-descriptions bordered label-placement="left"` + `n-list bordered` 组合 |
