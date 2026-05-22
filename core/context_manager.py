@@ -81,12 +81,15 @@ class ContextManager:
         current_chapter_plan: dict,
         tracking_context: str = "",
         story_idea: str = "",
+        volumes: list | None = None,
     ) -> str:
         world_ref = self._condense_world(world_data)
         outline_ref = self._condense_outline(outline)
         summaries_text = self._format_summaries(completed_summaries)
         current_plan = self._format_chapter_plan(current_chapter_plan)
         idea_text = story_idea.replace("\n", " ")[:1000] if story_idea else "（无）"
+
+        volume_info = self._format_volume_info(volumes, current_chapter_plan.get("chapter_number", 0))
 
         if tracking_context:
             result = FULL_CONTEXT_TEMPLATE.format(
@@ -106,6 +109,9 @@ class ContextManager:
                 current_plan=current_plan,
             )
 
+        if volume_info:
+            result = volume_info + "\n\n" + result
+
         # Truncate if context exceeds budget
         if len(result) > MAX_CONTEXT_CHARS:
             logger.warning(f"Context too long ({len(result)} chars), truncating summaries")
@@ -114,6 +120,10 @@ class ContextManager:
         return result
 
     def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict, story_idea: str = "") -> str:
+        # Cap tracking context to prevent it from consuming entire budget
+        if len(tracking_context) > 10000:
+            tracking_context = tracking_context[:10000] + "\n...(追踪数据已截断)"
+
         # Tiered compression: keep last 3 full, compress 4-10, drop oldest
         total = len(summaries)
         fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 500
@@ -168,6 +178,19 @@ class ContextManager:
             summaries=summaries_text,
             current_plan=current_plan_text,
         )
+
+    def _format_volume_info(self, volumes: list | None, chapter_number: int) -> str:
+        if not volumes or not chapter_number:
+            return ""
+        for vol in volumes:
+            if vol.start_chapter <= chapter_number <= vol.end_chapter:
+                pos = chapter_number - vol.start_chapter + 1
+                total = vol.end_chapter - vol.start_chapter + 1
+                lines = [f"## 当前卷信息\n第{vol.number}卷「{vol.title}」（第{vol.start_chapter}章-第{vol.end_chapter}章）。本章是本卷第{pos}章/共{total}章。"]
+                if chapter_number == vol.end_chapter:
+                    lines.append("本章是本卷的最后一章，请给出有分量的卷末收束。")
+                return "\n".join(lines)
+        return ""
 
     def _condense_world(self, world_data: dict | None) -> str:
         if not world_data:

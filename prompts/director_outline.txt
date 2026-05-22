@@ -16,7 +16,8 @@
     "tone_guidance": "文风指导（如紧凑、细腻、幽默等）",
     "reference_works": "参考作品风格",
     "target_words_per_chapter": "每章目标字数"
-  }
+  },
+  "volumes": [{"number": 1, "title": "卷名", "description": "本卷叙事焦点和概要（100-200字）"}]
 }
 
 ---
@@ -30,3 +31,4 @@
 - style.target_words_per_chapter 应考虑用户设定的章节数和总体篇幅
 - 不要引入世界观和角色卡中未提及的新设定
 - 大纲中的情节发展**绝不能违反** quality_gates 或 setting.taboos 中的负面约束（如禁止升级流则大纲不应包含升级打怪/修炼突破等情节）
+- 如果用户提供了卷结构划分，volumes 数组必须与用户定义的卷边界一致（卷号、卷名、章节范围），并在 description 中描述每卷的叙事焦点、核心冲突和情感走向。volumes 是对 three_act 的更细粒度划分——每卷可以包含三幕中的某一段或跨越多幕，但每卷都应有独立的叙事弧线

@@ -60,6 +60,16 @@ function chapterStepState(ch: any): { step: string; done: boolean }[] {
   }))
 }
 
+const groupedChapters = computed(() => {
+  if (!detail.value?.volumes?.length) return null
+  return detail.value.volumes.map((vol: any) => ({
+    ...vol,
+    chapters: detail.value.chapters.filter(
+      (ch: any) => ch.number >= vol.start_chapter && ch.number <= vol.end_chapter
+    ),
+  }))
+})
+
 // Current phase: from REST API data or from store messages
 const currentPhase = computed(() => {
   if (detail.value?.phase) return normalizePhase(detail.value.phase)
@@ -253,7 +263,19 @@ watch(() => store.sessionEnded, (ended) => {
 
         <n-tab-pane name="plotting" :tab="phaseLabel.plotting" :disabled="phaseState('plotting') === 'future'">
           <n-card v-if="phaseState('plotting') !== 'future' && detail?.chapters?.length" size="small">
-            <n-list bordered>
+            <template v-if="groupedChapters">
+              <div v-for="vol in groupedChapters" :key="vol.number">
+                <n-divider>卷{{ vol.number }} {{ vol.title }}</n-divider>
+                <n-list bordered>
+                  <n-list-item v-for="ch in vol.chapters" :key="ch.number">
+                    <n-thing>
+                      <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
+                    </n-thing>
+                  </n-list-item>
+                </n-list>
+              </div>
+            </template>
+            <n-list v-else bordered>
               <n-list-item v-for="ch in detail.chapters" :key="ch.number">
                 <n-thing>
                   <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
@@ -267,7 +289,30 @@ watch(() => store.sessionEnded, (ended) => {
 
         <n-tab-pane name="writing" :tab="phaseLabel.writing" :disabled="phaseState('writing') === 'future'">
           <n-card v-if="phaseState('writing') !== 'future' && detail?.chapters?.length" size="small">
-            <n-list bordered>
+            <template v-if="groupedChapters">
+              <div v-for="vol in groupedChapters" :key="vol.number">
+                <n-divider>卷{{ vol.number }} {{ vol.title }}</n-divider>
+                <n-list bordered>
+                  <n-list-item v-for="ch in vol.chapters" :key="ch.number">
+                    <n-thing>
+                      <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
+                      <template #description>
+                        <n-space align="center" :size="4">
+                          <template v-for="(s, i) in chapterStepState(ch)" :key="i">
+                            <n-tag size="tiny" :type="s.done ? 'success' : 'default'" :bordered="!s.done" round>
+                              {{ s.done ? STEP_LABELS[s.step] + '✓' : STEP_LABELS[s.step] }}
+                            </n-tag>
+                            <span v-if="i < STAGE_STEPS.length - 1" class="step-arrow">→</span>
+                          </template>
+                          <n-tag v-if="ch.revision_count > 0" size="tiny" type="warning" round>重写{{ ch.revision_count }}次</n-tag>
+                        </n-space>
+                      </template>
+                    </n-thing>
+                  </n-list-item>
+                </n-list>
+              </div>
+            </template>
+            <n-list v-else bordered>
               <n-list-item v-for="ch in detail.chapters" :key="ch.number">
                 <n-thing>
                   <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
@@ -294,16 +339,33 @@ watch(() => store.sessionEnded, (ended) => {
         <n-tab-pane name="complete" :tab="phaseLabel.complete" :disabled="phaseState('complete') === 'future'">
           <n-card v-if="phaseState('complete') !== 'future'" size="small">
             <n-result status="success" title="创作完成" :description="`共 ${(detail?.total_chapters || '?')} 章已全部完成`" />
-            <n-list v-if="detail?.chapters?.length" bordered style="margin-top: 12px">
-              <n-list-item v-for="ch in detail.chapters" :key="ch.number">
-                <n-thing>
-                  <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
-                  <template #action>
-                    <n-button size="small" @click="startRevise(ch.number)">修订</n-button>
-                  </template>
-                </n-thing>
-              </n-list-item>
-            </n-list>
+            <template v-if="detail?.chapters?.length">
+              <template v-if="groupedChapters">
+                <div v-for="vol in groupedChapters" :key="vol.number">
+                  <n-divider>卷{{ vol.number }} {{ vol.title }}</n-divider>
+                  <n-list bordered>
+                    <n-list-item v-for="ch in vol.chapters" :key="ch.number">
+                      <n-thing>
+                        <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
+                        <template #action>
+                          <n-button size="small" @click="startRevise(ch.number)">修订</n-button>
+                        </template>
+                      </n-thing>
+                    </n-list-item>
+                  </n-list>
+                </div>
+              </template>
+              <n-list v-else bordered style="margin-top: 12px">
+                <n-list-item v-for="ch in detail.chapters" :key="ch.number">
+                  <n-thing>
+                    <template #header>第{{ ch.number }}章 {{ ch.title }}</template>
+                    <template #action>
+                      <n-button size="small" @click="startRevise(ch.number)">修订</n-button>
+                    </template>
+                  </n-thing>
+                </n-list-item>
+              </n-list>
+            </template>
           </n-card>
           <n-text v-else depth="3" class="tab-placeholder">尚未完成</n-text>
         </n-tab-pane>

@@ -1200,6 +1200,9 @@ Vue3 SPA + Naive UI（暗色主题 + 绿色强调），Vite 构建，产物由 F
 - `MessageLog` — 消息流展示（含 braindump_result/refine_block/progress 等）
 - `RefineBlockViewer` — NTabs 分页展示设定详情（world_data/characters/locations/outline）
 - `JsonViewer` — 通用易读 JSON 展示组件（#133-#141）。Props: `data`/`type`/`auto`。关键逻辑：`worldObj` 解析 holistic directing 的 `data.world` 嵌套结构；`charsList` 兼容顶层和嵌套角色数组。渲染策略：概要→n-descriptions，列表→n-list+n-thing 卡片，短数组→n-tag，角色→嵌套 n-collapse（主层关键字段+子维度折叠），原始 JSON 折叠兜底。统一 `.jv-sub-title` 样式类。
+- 分卷结构（#142-#150）— `VolumeDef`（number/title/start_chapter/end_chapter）作为 `NovelState.volumes` 可选字段。参数收集阶段 ≥10 章时可选启用，LLM 建议分卷方案。Director outline 新增 `volumes` 键；Plotter 批次对齐卷边界；ContextManager 注入卷信息；tracker 激活预留的 `volume`/`volumeEnd`；`_combine_final` 输出卷标题页+单卷文件；前端按卷分组显示（`n-divider`+卷下章节列表）。`volumes=None` 时所有路径与无卷模式完全一致。
+- 长篇上下文防护（#151-#157）— 所有 Agent LLM 输入增设字符上限：Plotter 摘要（`MAX_SUMMARY_FULL=30`/`MAX_SUMMARY_SHORT=50`）；`get_tracking_context` 总输出 15K + 伏笔上限 20 条；`_truncate_context` 中 tracking 硬限 10K；Writer 续写 context 截断到 40K；Critic world_data 截断 2K；Tracker JSON 数组滑动窗口裁剪（30-50 条）。Web 错误消息通过 `_format_user_error` 转中文友好提示。
+- Writer 重写实质化（#158）— rewrite prompt 从保守（"保持原有好内容"）改为 7 条强制指令（major 必须大幅重写、warning 必须可感知改善），重写温度从 +0.15 提高到 +0.25（上限 0.95），解决审核重写循环中"改了等于没改"的问题。
 
 ### 21.7 文件结构
 

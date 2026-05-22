@@ -76,10 +76,12 @@ class WriterAgent(BaseAgent):
         char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
             logger.info(f"Writer: text too short ({char_count} 中文字), requesting continuation...")
+            # 续写时截断原始 context，避免 running_context + draft 叠加溢出
+            context_for_continuation = user_msg[:40000] + ("\n...(上下文已截断)" if len(user_msg) > 40000 else "")
             continuation = self.llm.chat_with_history(
                 system,
                 [
-                    {"role": "user", "content": user_msg},
+                    {"role": "user", "content": context_for_continuation},
                     {"role": "assistant", "content": text},
                     {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
                 ],
@@ -98,14 +100,20 @@ class WriterAgent(BaseAgent):
         # 重写时不重复传入完整 running_context，只传审稿意见和草稿
         # running_context 已在 system prompt 中通过风格指南体现，避免 token 叠加
         user_msg = (
-            f"## 审稿意见\n{review_feedback}\n\n"
+            f"## 审稿意见（必须逐一修复，不能只做表面调整）\n{review_feedback}\n\n"
             f"## 原始草稿\n{draft}\n\n"
-            f"请根据审稿意见修改上述草稿，修复指出的所有问题。保持原有的好内容，只修改有问题的部分。\n\n"
-            f"注意：请实际修复问题，避免只做表面调整而保留同样的问题。"
-            f"如审稿指出\"对话单调\"，请实质性改写对话表达；如指出\"节奏拖沓\"，请砍掉冗余段落。"
+            f"## 重写要求\n"
+            f"请针对审稿意见中指出的每一个问题进行实质性修改。具体要求：\n"
+            f"1. 对 major 级别问题：必须大幅重写相关段落，不能只改几个词\n"
+            f"2. 对 warning 级别问题：必须有可感知的改善，不能原样保留\n"
+            f"3. 如果审稿指出\"对话单调\"，必须完全重写对话表达和结构\n"
+            f"4. 如果审稿指出\"节奏拖沓\"，必须删除冗余段落并加快节奏\n"
+            f"5. 如果审稿指出\"角色OOC\"，必须重写该角色全部言行使其符合人设\n"
+            f"6. 保留未出问题段落的精华，但出问题的段落宁可重写也不要修修补补\n"
+            f"7. 输出完整的修改后章节，不要省略任何部分\n"
         )
 
-        rewrite_temp = min(self._temperature() + 0.15, 0.9)
+        rewrite_temp = min(self._temperature() + 0.25, 0.95)
         logger.info(f"Writer: rewriting chapter {chapter_plan.get('chapter_number', '?')} (temp={rewrite_temp:.2f})...")
         text = self.llm.chat(system, user_msg, temperature=rewrite_temp)
 
@@ -113,10 +121,11 @@ class WriterAgent(BaseAgent):
         char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
             logger.info(f"Writer: rewrite too short ({char_count} 中文字), requesting continuation...")
+            context_for_continuation = user_msg[:40000] + ("\n...(上下文已截断)" if len(user_msg) > 40000 else "")
             continuation = self.llm.chat_with_history(
                 system,
                 [
-                    {"role": "user", "content": user_msg},
+                    {"role": "user", "content": context_for_continuation},
                     {"role": "assistant", "content": text},
                     {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
                 ],

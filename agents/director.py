@@ -28,11 +28,13 @@ class DirectorAgent(BaseAgent):
             prompt = f"{prompt}\n\n## 创作准则（必须遵循）\n{constitution}"
         return prompt
 
-    def run(self, story_idea: str, num_chapters: int = 20, style_guide: dict | None = None) -> dict:
+    def run(self, story_idea: str, num_chapters: int = 20, style_guide: dict | None = None, volumes: list | None = None) -> dict:
         """Legacy: generate all director output in one call."""
+        volume_text = self._format_volume_hint(volumes)
         user_msg = (
             f"故事灵感：{story_idea}\n\n"
-            f"计划章节数：{num_chapters}章\n\n"
+            f"计划章节数：{num_chapters}章\n"
+            f"{volume_text}"
             f"请根据以上灵感，生成完整的小说设定。"
         )
         system = self.apply_style(self.system_prompt, style_guide)
@@ -103,12 +105,14 @@ class DirectorAgent(BaseAgent):
         return result
 
     def run_outline(self, story_idea: str, num_chapters: int,
-                    world_context_json: str, style_guide: dict | None = None) -> dict:
+                    world_context_json: str, style_guide: dict | None = None, volumes: list | None = None) -> dict:
         """Generate outline + style based on all confirmed data."""
         system = self.apply_style(self._outline_prompt, style_guide)
+        volume_text = self._format_volume_hint(volumes)
         user_msg = (
             f"故事灵感：{story_idea}\n\n"
-            f"计划章节数：{num_chapters}章\n\n"
+            f"计划章节数：{num_chapters}章\n"
+            f"{volume_text}"
             f"## 已确认的世界观、角色和地点\n{world_context_json}\n\n"
             f"请根据以上全部设定，生成故事大纲（含 style 字段）。只输出 JSON。"
         )
@@ -119,3 +123,13 @@ class DirectorAgent(BaseAgent):
             return {}
         logger.info("Director.run_outline: done.")
         return result
+
+    @staticmethod
+    def _format_volume_hint(volumes: list | None) -> str:
+        if not volumes:
+            return ""
+        lines = ["\n卷结构划分："]
+        for v in volumes:
+            lines.append(f"  卷{v.number}「{v.title}」：第{v.start_chapter}-{v.end_chapter}章")
+        lines.append("请在大纲中体现各卷的叙事焦点，并在 outline 中添加 volumes 键描述每卷概要。\n")
+        return "\n".join(lines)

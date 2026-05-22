@@ -18,6 +18,14 @@ def atomic_write_json(path: Path, data) -> None:
 
 
 @dataclass
+class VolumeDef:
+    number: int
+    title: str
+    start_chapter: int  # 1-based, inclusive
+    end_chapter: int    # inclusive
+
+
+@dataclass
 class ChapterState:
     chapter_number: int
     title: str = ""
@@ -53,6 +61,8 @@ class NovelState:
     # 精修阶段（Phase 1.5）已确认的 block 列表，断点续传时跳过；命名规则：
     #   "world" / "outline" / "character:<name>" / "location:<name>"
     refined_blocks: list[str] = field(default_factory=list)
+    # 可选分卷结构，None 表示不分卷
+    volumes: list[VolumeDef] | None = None
 
     def __post_init__(self):
         if not self.created_at:
@@ -81,8 +91,10 @@ class StateManager:
             return None
         data = json.loads(state_path.read_text(encoding="utf-8"))
         chapters = [ChapterState(**{k: v for k, v in ch.items() if k in ChapterState.__dataclass_fields__}) for ch in data.pop("chapters", [])]
+        vol_data = data.pop("volumes", None)
+        volumes = [VolumeDef(**v) for v in vol_data] if vol_data else None
         valid = {k: v for k, v in data.items() if k in NovelState.__dataclass_fields__}
-        return NovelState(**valid, chapters=chapters)
+        return NovelState(**valid, chapters=chapters, volumes=volumes)
 
     def list_novels(self) -> list[str]:
         if not OUTPUT_DIR.exists():

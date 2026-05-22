@@ -789,3 +789,45 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #139 | 严重 | 角色展示将 30+ 复杂嵌套字段（appearance/abilities/background/growth_plan/voice）平铺为扁平 key-value，字段堆叠不可读 | `JsonViewer.vue` — 角色改为 `n-collapse` 折叠面板：主层展示 personality/motivation/arc/fatal_flaw/aliases，嵌套折叠展示 appearance/abilities/background/growth_plan/voice 各子维度（`flattenObj()` 递归展开） |
 | #140 | 中等 | 世界观地点只显示名称标签，缺少 description/climate/terrain；势力缺少 key_figures；历史缺少 cause/result | `JsonViewer.vue` — locations 改为 `n-list` + `n-thing` 卡片（含 climate/terrain 标签）；factions 增加 key_figures 标签；history 展示 cause + result |
 | #141 | 中等 | 整体样式错位：子标题不统一、descriptions 嵌套层级不一致 | `JsonViewer.vue` — 统一 `.jv-sub-title` 类 + 间距；所有子区域使用一致的 `n-descriptions bordered label-placement="left"` + `n-list bordered` 组合 |
+
+### 2026-05-22 可选分卷结构（卷名 + 卷级组织）
+
+| 编号 | 类型 | 说明 | 位置 |
+|------|------|------|------|
+| #142 | 功能 | 新增 `VolumeDef` 数据类（number/title/start_chapter/end_chapter）和 `NovelState.volumes` 可选字段 | `core/state_manager.py` |
+| #143 | 功能 | 参数收集阶段新增可选分卷流程：≥10 章时可选择启用，LLM 建议分卷方案 + 用户确认/调整 | `core/pipeline.py` — `_collect_volume_definitions()` |
+| #144 | 功能 | Director 大纲输出新增 `volumes` 键（卷号/卷名/叙事焦点），prompt 条件注入卷结构 | `agents/director.py` + `prompts/director_system.txt` / `director_outline.txt` |
+| #145 | 功能 | Plotter 批次生成对齐卷边界（不跨卷），每批次注入卷上下文，卷末章指导收束 | `agents/plotter.py` + `prompts/plotter_system.txt` |
+| #146 | 功能 | 激活 tracker 预留的 `currentState.volume` 和 `checkpoints.volumeEnd` 字段，新增 `advance_volume()` | `core/tracker.py` |
+| #147 | 功能 | ContextManager 注入当前卷信息（卷号/卷名/进度/是否卷末章），指导 writer 生成 | `core/context_manager.py` |
+| #148 | 功能 | `_combine_final` 支持卷标题页 + 每卷单独输出文件 `{name}_卷N.txt` | `core/pipeline.py` |
+| #149 | 功能 | 前端章节列表按卷分组显示（`n-divider` 卷标题 + 卷下章节），兼容无卷 flat 模式 | `frontend/src/views/NovelDetailView.vue` |
+| #150 | 功能 | REST API 返回 `volumes` 字段（null 或 VolumeDef 列表） | `web/routers/novels.py` |
+
+架构变更：
+- 分卷为可选功能，`volumes=None` 时所有代码路径行为与当前完全一致
+- 章节编号保持全局（不按卷重置），避免追踪系统混乱
+- 向后兼容：`StateManager.load` 过滤未知字段，旧状态加载为 `volumes=None`
+
+### 2026-05-22 长篇上下文溢出防护 + 错误友好化
+
+| 编号 | 类型 | 说明 | 位置 |
+|------|------|------|------|
+| #151 | 稳定性 | Writer 续写时 `chat_with_history` 重发 80K running_context + 5K draft，300 章时溢出 128K token 窗口 | `agents/writer.py` — 续写时截断原始 context 到 40K 字符 |
+| #152 | 稳定性 | Plotter `_build_existing_summaries` 300 章时累积 295 条摘要（~24K 字符）无截断 | `agents/plotter.py` — 最近 30 条完整 + 50 条简略 + `MAX_SUMMARY_FULL/SHORT` 常量 |
+| #153 | 稳定性 | `get_tracking_context` 活跃伏笔列表无限增长（300 章 50+ 项），总输出无上限 | `core/tracker.py` — 伏笔上限 20 条 + 总输出硬限 15K 字符 |
+| #154 | 稳定性 | `context_manager._truncate_context` 中 tracking_context 计入 fixed_len 但从不截断，可能吃光摘要预算 | `core/context_manager.py` — tracking 硬限 10K 字符 |
+| #155 | 稳定性 | Tracker JSON 数组（appearanceTracking/consistency.warnings/plotHoles/common_errors 等）无限增长，300 章时文件膨胀 | `core/tracker.py` — `update_tracking` + `_consume_review` 添加滑动窗口裁剪（保留最近 30-50 条） |
+| #156 | 稳定性 | Critic 发送完整 world_data JSON（~10-15K），Reviewer 会截断到 2K 但 Critic 不会 | `agents/critic.py` — 截断 world_data 到 2K + tracking 到 10K |
+| #157 | 体验 | LLM 错误（JSON 截断/网络断/限流/超时/认证失败等）直接显示原始异常堆栈，用户无法理解 | `web/app.py` — `_format_user_error` 转中文友好消息 + `ui.error` 发到前端消息流 |
+
+架构变更：
+- 所有 Agent 的 LLM 输入现在有明确字符上限，300 章长篇不会溢出上下文窗口
+- `get_tracking_context` 输出硬限 15K，`_truncate_context` 中 tracking 硬限 10K，plotter 摘要硬限 ~3K
+- Web 端错误消息从原始 `str(exception)` 改为分类中文提示
+
+### 2026-05-22 Writer 重写实质化
+
+| 编号 | 类型 | 说明 | 位置 |
+|------|------|------|------|
+| #158 | Bug | Writer rewrite prompt 要求"保持原有好内容，只修改有问题的部分"，LLM 只做表面微调不解决实际问题，导致审核多次不通过但问题不变 | `agents/writer.py` — rewrite prompt 改为 7 条强制实质性重写指令，按 major/warning 区分处理力度；重写温度从 +0.15 提高到 +0.25（上限 0.95） |

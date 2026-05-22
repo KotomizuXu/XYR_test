@@ -100,6 +100,15 @@ async def get_novel_detail(novel_name: str):
             for ch in state.chapters
         ],
         "refined_blocks": state.refined_blocks,
+        "volumes": [
+            {
+                "number": v.number,
+                "title": v.title,
+                "start_chapter": v.start_chapter,
+                "end_chapter": v.end_chapter,
+            }
+            for v in (state.volumes or [])
+        ] if state.volumes else None,
     }
 
 

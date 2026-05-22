@@ -27,9 +27,12 @@ class CriticAgent(BaseAgent):
             f"## 章节剧情计划\n{json.dumps(chapter_plan, ensure_ascii=False, indent=2)}\n",
         ]
         if world_data:
-            parts.append(f"## 世界观数据\n{json.dumps(world_data, ensure_ascii=False, indent=2)}\n")
+            world_str = json.dumps(world_data, ensure_ascii=False, indent=2)
+            if len(world_str) > 2000:
+                world_str = world_str[:2000] + "\n...(已截断)"
+            parts.append(f"## 世界观数据\n{world_str}\n")
         if tracking_context:
-            parts.append(f"## 追踪上下文（角色状态、时间线、关系等）\n{tracking_context}\n")
+            parts.append(f"## 追踪上下文（角色状态、时间线、关系等）\n{tracking_context[:10000]}\n")
 
         parts.append(f"## 用户修改意见\n{user_feedback}")
 

@@ -209,7 +209,7 @@ class NovelPipeline:
             if not self._checkpoint(state, f"拆分 {state.total_chapters} 章剧情计划（耗时较长）"):
                 return
             ui.info("[编剧] 正在拆分章节和规划剧情...")
-            chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters, style_guide=state.style_guide)
+            chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters, style_guide=state.style_guide, volumes=state.volumes)
             state.chapter_plans = chapter_plans
 
             novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
@@ -334,6 +334,23 @@ class NovelPipeline:
             "total_chapters": total_chapters,
             "words_per_chapter": {"min": words_min, "max": words_max},
         }
+
+        # 可选分卷结构
+        use_volumes = False
+        if total_chapters >= 10:
+            try:
+                use_volumes = prompt_yes_no("  是否使用分卷结构？（长篇小说建议分卷）", default=False)
+            except UserAbort:
+                self._interrupted = True
+                ui.warn("已取消参数收集")
+                return
+        if use_volumes:
+            state.volumes = self._collect_volume_definitions(total_chapters, state.story_idea)
+            state.novel_params["volumes"] = [
+                {"number": v.number, "title": v.title, "start_chapter": v.start_chapter, "end_chapter": v.end_chapter}
+                for v in state.volumes
+            ]
+
         state.phase = "directing"
         self.state_mgr.save(state)
 
@@ -352,6 +369,62 @@ class NovelPipeline:
             total_chapters, words_min, words_max,
             {"character": rec_char, "plotline": rec_plot, "foreshadowing": rec_foreshadow},
         )
+
+    def _collect_volume_definitions(self, total_chapters: int, story_idea: str) -> list:
+        """通过 LLM 建议分卷方案，用户确认/调整后返回 VolumeDef 列表。"""
+        from core.state_manager import VolumeDef
+        ui.section("分卷规划", style="cyan")
+        ui.info(f"共 {total_chapters} 章，正在生成分卷建议...")
+
+        suggest_prompt = (
+            f"故事灵感：{story_idea}\n\n"
+            f"总章节数：{total_chapters}\n\n"
+            f"请为这部小说设计分卷方案。每卷应有独立的叙事焦点和情感弧线。"
+            f"卷的划分应基于故事的自然节奏（如地点转换、时间跳跃、阶段性的冲突与解决）。\n\n"
+            f"输出 JSON 数组：[{{\"title\": \"卷名\", \"chapters\": \"起始章-结束章（如 1-8）\", \"reason\": \"分卷理由\"}}]\n"
+            f"每卷建议 8-15 章。只输出 JSON，不要额外文字。"
+        )
+        result = self.llm.chat_json("你是一位小说结构规划师。", suggest_prompt, temperature=0.7)
+        if not isinstance(result, list):
+            ui.warn("分卷建议格式异常，跳过分卷")
+            return None
+
+        # 解析建议并展示
+        suggestions = []
+        ch_cursor = 1
+        for i, item in enumerate(result, 1):
+            title = item.get("title", f"卷{i}")
+            chapters_str = item.get("chapters", "")
+            reason = item.get("reason", "")
+            try:
+                parts = chapters_str.split("-")
+                start = int(parts[0].strip())
+                end = int(parts[1].strip())
+            except (ValueError, IndexError):
+                start = ch_cursor
+                end = min(ch_cursor + total_chapters // len(result) - 1, total_chapters)
+            suggestions.append({"number": i, "title": title, "start": start, "end": end, "reason": reason})
+            ch_cursor = end + 1
+
+        # 确保覆盖全部章节
+        if suggestions:
+            suggestions[-1]["end"] = max(suggestions[-1]["end"], total_chapters)
+
+        ui.info("分卷建议：")
+        for s in suggestions:
+            ui.info(f"  卷{s['number']}「{s['title']}」：第{s['start']}-{s['end']}章 — {s['reason']}")
+
+        try:
+            accept = prompt_yes_no("  是否采纳此分卷方案？", default=True)
+        except UserAbort:
+            self._interrupted = True
+            return None
+
+        if not accept:
+            ui.info("跳过分卷，将使用平面章节结构。")
+            return None
+
+        return [VolumeDef(s["number"], s["title"], s["start"], s["end"]) for s in suggestions]
 
     # ── Incremental Directing (Phase 1) ──────────────────────────────────
 
@@ -378,7 +451,7 @@ class NovelPipeline:
                 return
             ui.info("[导演] 正在一次生成全部设定...")
             result = self.director.run(
-                state.story_idea, state.total_chapters, style_guide=state.style_guide)
+                state.story_idea, state.total_chapters, style_guide=state.style_guide, volumes=state.volumes)
             if not isinstance(result, dict) or not result:
                 ui.error("[导演] 生成失败，请重试")
                 return
@@ -595,7 +668,7 @@ class NovelPipeline:
                 context_json = self._build_director_context_json(state)
                 outline_data = self.director.run_outline(
                     state.story_idea, state.total_chapters,
-                    context_json, state.style_guide)
+                    context_json, state.style_guide, volumes=state.volumes)
                 state.outline = outline_data if isinstance(outline_data, dict) else {}
                 self.state_mgr.save(state)
 
@@ -1116,6 +1189,7 @@ class NovelPipeline:
             running_ctx = self.ctx_mgr.build_running_context(
                 state.world_data, state.outline, completed_summaries, plan,
                 tracking_context=tracking_ctx, story_idea=state.story_idea,
+                volumes=state.volumes,
             )
 
             # ──────────── Stage 1: Writer draft（可跳过：已有 drafted 标记 + 文件存在）────────────
@@ -1281,6 +1355,9 @@ class NovelPipeline:
                 tracker.log_changes_csv(ch_num, before, after)
 
                 ch.stage = "tracked"
+                # Volume boundary check
+                if state.volumes:
+                    tracker.advance_volume(ch_num, state.volumes)
                 self.state_mgr.save(state)
             else:
                 ui.hint(f"[恢复] 跳过追踪更新，复用已存在数据（stage=tracked）")
@@ -1334,28 +1411,48 @@ class NovelPipeline:
 
         combined_parts = [f"《{state.novel_name}》\n\n"]
 
-        for ch in state.chapters:
-            ch_num = ch.chapter_number
-            edited_path = Path(ch.edited_path) if ch.edited_path else None
-            if not edited_path or not edited_path.exists():
-                edited_path = Path(ch.draft_path) if ch.draft_path else None
-
-            if not edited_path or not edited_path.exists():
-                continue
-
-            text = edited_path.read_text(encoding="utf-8")
-
-            # Save individual final chapter
-            final_path = final_dir / f"chapter_{ch_num:02d}.txt"
-            final_path.write_text(text, encoding="utf-8")
-            ch.final_path = str(final_path)
-
-            # Add to combined
-            combined_parts.append(f"第{ch_num}章 {ch.title}\n\n{text}\n\n")
+        if state.volumes:
+            for vol in state.volumes:
+                vol_parts = [f"══════════════════════════════\n"
+                             f"卷{vol.number}  {vol.title}\n"
+                             f"（第{vol.start_chapter}章 — 第{vol.end_chapter}章）\n"
+                             f"══════════════════════════════\n\n"]
+                for ch in state.chapters[vol.start_chapter - 1 : vol.end_chapter]:
+                    ch_num = ch.chapter_number
+                    text = self._read_chapter_text(ch)
+                    if text is None:
+                        continue
+                    final_path = final_dir / f"chapter_{ch_num:02d}.txt"
+                    final_path.write_text(text, encoding="utf-8")
+                    ch.final_path = str(final_path)
+                    header = f"第{ch_num}章 {ch.title}\n\n"
+                    combined_parts.append(header + text + "\n\n")
+                    vol_parts.append(header + text + "\n\n")
+                vol_path = final_dir / f"{state.novel_name}_卷{vol.number}.txt"
+                vol_path.write_text("".join(vol_parts), encoding="utf-8")
+        else:
+            for ch in state.chapters:
+                ch_num = ch.chapter_number
+                text = self._read_chapter_text(ch)
+                if text is None:
+                    continue
+                final_path = final_dir / f"chapter_{ch_num:02d}.txt"
+                final_path.write_text(text, encoding="utf-8")
+                ch.final_path = str(final_path)
+                combined_parts.append(f"第{ch_num}章 {ch.title}\n\n{text}\n\n")
 
         full_path = final_dir / f"{state.novel_name}_全文.txt"
         full_path.write_text("".join(combined_parts), encoding="utf-8")
         ui.success(f"全文已合并保存至：{full_path}")
+
+    @staticmethod
+    def _read_chapter_text(ch) -> str | None:
+        edited_path = Path(ch.edited_path) if ch.edited_path else None
+        if not edited_path or not edited_path.exists():
+            edited_path = Path(ch.draft_path) if ch.draft_path else None
+        if not edited_path or not edited_path.exists():
+            return None
+        return edited_path.read_text(encoding="utf-8")
 
     # ── Revise flow ──────────────────────────────────────────────
 
@@ -1436,6 +1533,7 @@ class NovelPipeline:
         running_ctx = self.ctx_mgr.build_running_context(
             state.world_data, state.outline, completed_summaries, chapter_plan,
             tracking_context=tracking_ctx, story_idea=state.story_idea,
+            volumes=state.volumes,
         )
 
         if isinstance(selected_idea, dict):

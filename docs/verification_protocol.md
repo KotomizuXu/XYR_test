@@ -711,6 +711,68 @@
 
 ---
 
+**K6. 分卷结构可选性验证**
+
+检查目标：`volumes=None` 时所有代码路径与无卷模式完全一致，不引入任何行为差异。
+
+检查方法：
+1. 创建不启用分卷的小说，确认 `novel_state.json` 中 `volumes` 为 `null`
+2. 确认 pipeline 中 `if state.volumes:` 分支全部跳过，director/plotter/context_manager/tracker 行为不变
+3. 确认 `_combine_final` 无卷时不输出卷标题页，不生成 `{name}_卷N.txt` 文件
+4. 确认前端 `groupedChapters` computed 在 `volumes: null` 时返回 `null`，渲染 flat 列表
+5. 确认 REST API `volumes` 字段为 `null`（不是缺失键）
+
+通过条件：无卷模式与分卷功能合并前的行为完全一致
+
+---
+
+**K7. 分卷功能端到端验证**
+
+检查目标：启用分卷的小说，卷信息贯穿全流程。
+
+检查方法：
+1. 创建 ≥10 章的小说并选择分卷，确认 `novel_state.json` 中 `volumes` 含正确的 VolumeDef 列表
+2. 确认 director outline 输出包含 `volumes` 键（卷号/卷名/description）
+3. 确认 plotter 批次不跨卷（检查日志中的"卷N"标记）
+4. 确认 `plot_tracker.json` 的 `currentState.volume` 随章节推进递增，`checkpoints.volumeEnd` 记录卷末点
+5. 确认 `_combine_final` 输出 `{name}_卷1.txt` 等单卷文件，全文含卷标题页
+6. 确认前端章节列表按卷分组显示（`n-divider` 卷标题）
+
+通过条件：卷信息从参数收集到最终输出全链路贯通
+
+---
+
+**K8. 长篇（≥100 章）上下文安全验证**
+
+检查目标：300 章小说场景下，所有 Agent 的 LLM 输入不超出 128K token 上下文窗口。
+
+检查方法：
+1. 确认 Plotter `_build_existing_summaries` 输出不超过 3K 字符（`MAX_SUMMARY_FULL=30`/`MAX_SUMMARY_SHORT=50`）
+2. 确认 `get_tracking_context` 总输出 ≤15K 字符（硬限截断）
+3. 确认 `_truncate_context` 中 tracking_context ≤10K 字符（硬限截断）
+4. 确认 Writer 续写 `chat_with_history` 的原始 context 截断到 40K 字符
+5. 确认 Critic world_data 截断到 2K + tracking 截断到 10K
+6. 确认 Tracker `update_tracking`/`_consume_review` 对无上限数组滑动窗口裁剪（30-50 条）
+
+通过条件：所有截断点存在且阈值合理，无 Agent 输入超过 ~60K 字符（~90K token）
+
+---
+
+**K9. Web 端错误友好化验证**
+
+检查目标：LLM 错误在 Web 前端显示为可理解的中文提示，不显示原始异常堆栈。
+
+检查方法：
+1. 模拟 JSON 解析失败，确认前端 `n-alert` 显示"AI 返回的数据格式异常"
+2. 模拟网络断开，确认显示"网络连接失败"
+3. 模拟 API 限流，确认显示"API 调用频率超限"
+4. 确认后端控制台仍有 `traceback.print_exc()` 完整堆栈用于排查
+5. 确认 `ui.error` 消息出现在前端消息流中（不只在 `n-alert`）
+
+通过条件：所有已知错误类型有对应中文提示，不出现原始 Python 异常文本
+
+---
+
 ## 三、验证报告输出格式
 
 每次执行后，按以下格式输出报告：
@@ -768,5 +830,5 @@
 
 ---
 
-*最后验证执行时间：2026-05-22（含 #108-#137 Web 端增强验证项补充）*
-*协议版本：1.4*
+*最后验证执行时间：2026-05-22（含 #108-#158 Web 端增强 + 可选分卷结构 + 长篇上下文防护 + Writer 重写实质化验证项补充）*
+*协议版本：1.7*

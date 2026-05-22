@@ -535,6 +535,22 @@ class Tracker:
         }
         self._write_json("plot_tracker.json", tracker)
 
+    def advance_volume(self, chapter_num: int, volumes: list) -> None:
+        """检查当前章节是否到达卷末边界，更新 plot_tracker 中的卷信息。"""
+        from core.state_manager import VolumeDef
+        tracker = self._read_json("plot_tracker.json")
+        for vol in volumes:
+            if chapter_num == vol.end_chapter:
+                tracker["checkpoints"]["volumeEnd"].append({
+                    "volume": vol.number,
+                    "title": vol.title,
+                    "chapter": chapter_num,
+                })
+                next_vol = vol.number + 1
+                tracker["currentState"]["volume"] = next_vol
+                self._write_json("plot_tracker.json", tracker)
+                return
+
     def _init_relationships(self, world_data: dict) -> None:
         all_chars, _, _ = self._parse_characters(world_data)
         now = self._now()
@@ -1009,6 +1025,15 @@ class Tracker:
                     f"第{chapter_num}章：出现显式性格描述，建议检查是否符合已建立的性格设定"
                 )
         char_state["lastUpdated"] = now
+
+        # Prune unbounded arrays to prevent file bloat
+        appearance_list = char_state.get("appearanceTracking", [])
+        if len(appearance_list) > 50:
+            char_state["appearanceTracking"] = appearance_list[-50:]
+        warnings = char_state.get("consistency", {}).get("warnings", [])
+        if len(warnings) > 30:
+            char_state["consistency"]["warnings"] = warnings[-30:]
+
         self._write_json("character_state.json", char_state)
 
         # --- L1.1: Consume reviewer output ---
@@ -1113,7 +1138,22 @@ class Tracker:
                 rules_changed = True
 
         if rules_changed:
+            # Prune common_errors arrays
+            for target in ("character_substitution", "address_mistakes"):
+                arr = rules.get("common_errors", {}).get(target, [])
+                if len(arr) > 30:
+                    rules["common_errors"][target] = arr[-30:]
             self._write_json("validation_rules.json", rules)
+
+        # Prune plot_tracker notes arrays
+        if plot_changed or notes.get("plotHoles") or notes.get("inconsistencies"):
+            for key in ("plotHoles", "inconsistencies"):
+                arr = notes.get(key, [])
+                if len(arr) > 30:
+                    notes[key] = arr[-30:]
+            if plot_changed:
+                plot_tracker["lastUpdated"] = now
+                self._write_json("plot_tracker.json", plot_tracker)
 
     # --- Forgotten elements check ---
 
@@ -1772,7 +1812,7 @@ class Tracker:
             active_fs = [f for f in foreshadowing if isinstance(f.get("planted"), dict) and f["planted"].get("chapter") and f.get("status") not in ("revealed", "resolved")]
             if active_fs:
                 lines = ["## 活跃伏笔"]
-                for f in active_fs:
+                for f in active_fs[:20]:
                     ch = f["planted"].get("chapter", "?")
                     hint_str = ""
                     if f.get("hints"):
@@ -1885,4 +1925,7 @@ class Tracker:
                         lines.append(f"- {mood}：{guide}")
                 parts.append("\n".join(lines))
 
-        return "\n\n".join(parts) if parts else ""
+        result = "\n\n".join(parts) if parts else ""
+        if len(result) > 15000:
+            result = result[:15000] + "\n\n...(追踪数据已截断，仅保留最近内容)"
+        return result
