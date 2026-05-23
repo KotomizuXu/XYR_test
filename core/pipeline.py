@@ -468,8 +468,14 @@ class NovelPipeline:
             initial=full_json,
             system_prompt=REFINE_HOLISTIC_PROMPT,
             context_summary=context,
+            on_update=lambda r: (
+                self._split_director_output(state, r),
+            ),
         )
         if self._interrupted:
+            # 保存已调整数据但不推进 phase，恢复时可继续精修
+            self._split_director_output(state, refined)
+            ui.hint("[中断] 调整已保存，恢复后可继续精修")
             return
 
         # Step 3: 拆回 state
@@ -489,6 +495,9 @@ class NovelPipeline:
         }
         return merged
 
+    # Expected top-level keys from director output (whitelist)
+    _DIRECTOR_KEYS = {"world_data", "world", "characters", "locations", "outline", "style"}
+
     def _split_director_output(self, state: NovelState, merged: dict) -> None:
         """将全量精修结果拆回 state.world_data 和 state.outline。"""
         if not isinstance(merged, dict):
@@ -496,7 +505,12 @@ class NovelPipeline:
         outline = merged.pop("outline", state.outline or {})
         characters = merged.pop("characters", state.world_data.get("characters", []))
         locations = merged.pop("locations", state.world_data.get("locations", []))
+        merged.pop("style", None)  # legacy field, now handled by StyleAdvisor
         world_part = merged.get("world_data", merged)
+        # 排除法：只过滤掉已知非 world_data 的顶层键，保留 LLM 生成的所有其他键
+        _EXCLUDE_KEYS = {"world_data", "characters", "locations", "outline", "style"}
+        if isinstance(world_part, dict):
+            world_part = {k: v for k, v in world_part.items() if k not in _EXCLUDE_KEYS}
         state.world_data = {**world_part, "characters": characters, "locations": locations}
         state.outline = outline
         self.state_mgr.save(state)
@@ -559,6 +573,9 @@ class NovelPipeline:
                 system_prompt=REFINE_WORLD_PROMPT, context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.world_data.update(refined)
+                    self.state_mgr.save(state)
                 return
             for k in list(state.world_data.keys()):
                 if k not in ("characters", "locations", "planned_cast", "planned_locations"):
@@ -607,6 +624,9 @@ class NovelPipeline:
                 system_prompt=REFINE_CHARACTER_PROMPT, context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.world_data["characters"][idx] = refined
+                    self.state_mgr.save(state)
                 return
             if isinstance(refined, dict):
                 state.world_data["characters"][idx] = refined
@@ -652,6 +672,9 @@ class NovelPipeline:
                 system_prompt=REFINE_LOCATION_PROMPT, context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.world_data["locations"][idx] = refined
+                    self.state_mgr.save(state)
                 return
             if isinstance(refined, dict):
                 state.world_data["locations"][idx] = refined
@@ -678,6 +701,9 @@ class NovelPipeline:
                 system_prompt=REFINE_OUTLINE_PROMPT, context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.outline = refined
+                    self.state_mgr.save(state)
                 return
             if isinstance(refined, dict):
                 state.outline = refined
@@ -820,6 +846,9 @@ class NovelPipeline:
             context_summary=context,
         )
         if self._interrupted:
+            if isinstance(refined, dict):
+                state.world_data.update(refined)
+                self.state_mgr.save(state)
             return
         # 写回 state.world_data，保留 characters / locations
         for k in list(state.world_data.keys()):
@@ -855,6 +884,9 @@ class NovelPipeline:
                 context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.world_data["characters"][idx] = refined
+                    self.state_mgr.save(state)
                 return
             if isinstance(refined, dict):
                 state.world_data["characters"][idx] = refined
@@ -885,6 +917,9 @@ class NovelPipeline:
                 context_summary=context,
             )
             if self._interrupted:
+                if isinstance(refined, dict):
+                    state.world_data["locations"][idx] = refined
+                    self.state_mgr.save(state)
                 return
             if isinstance(refined, dict):
                 state.world_data["locations"][idx] = refined
@@ -908,14 +943,20 @@ class NovelPipeline:
             context_summary=context,
         )
         if self._interrupted:
+            if isinstance(refined, dict):
+                state.outline = refined
+                self.state_mgr.save(state)
             return
         if isinstance(refined, dict):
             state.outline = refined
         state.refined_blocks.append("outline")
         self.state_mgr.save(state)
 
-    def _refine_block(self, *, label: str, initial, system_prompt: str, context_summary: str):
-        """通用打磨循环（"是/调整/重写"三选一），返回打磨后的内容。"""
+    def _refine_block(self, *, label: str, initial, system_prompt: str, context_summary: str,
+                      on_update=None):
+        """通用打磨循环（"是/调整/重写"三选一），返回打磨后的内容。
+        on_update(result): 每次调整后回调，用于将当前 result 写回 state 并保存到磁盘。
+        """
         result = initial
         try:
             while True:
@@ -946,6 +987,8 @@ class NovelPipeline:
                         ui.warn("打磨失败，保留当前版本")
                         continue
                     result = new_result
+                    if on_update:
+                        on_update(result)
                     ui.show_refine_block(label, result, modified=True)
 
                 # 外层 rewrite 分支：整块重新生成（反上下文 + 升温 + 明示换思路）
@@ -964,32 +1007,29 @@ class NovelPipeline:
                     ui.warn("重生成失败，保留当前版本")
                     return result
                 result = new_result
+                if on_update:
+                    on_update(result)
         except UserAbort:
+            self._interrupted = True
             ui.warn("已取消打磨，保留当前版本")
             return result
 
     def _confirm_refine(self, label: str) -> str:
         """三选一：返回 'yes' / 'rewrite' / 用户自定义调整意见。"""
-        try:
-            choice = prompt_choice(
-                f"  「{label}」如何处理？",
-                [
-                    ("yes", "确认（继续下一块）"),
-                    ("adjust", "调整（告诉我哪里要改）"),
-                    ("rewrite", "重写（换方向整块重生成）"),
-                ],
-                default_key="yes",
-            )
-        except UserAbort:
-            return "yes"
+        choice = prompt_choice(
+            f"  「{label}」如何处理？",
+            [
+                ("yes", "确认（继续下一块）"),
+                ("adjust", "调整（告诉我哪里要改）"),
+                ("rewrite", "重写（换方向整块重生成）"),
+            ],
+            default_key="yes",
+        )
         if choice == "yes":
             return "yes"
         if choice == "rewrite":
             return "rewrite"
-        try:
-            feedback = prompt_multiline("  请说明要怎么调整：")
-        except UserAbort:
-            return "yes"
+        feedback = prompt_multiline("  请说明要怎么调整：")
         return feedback if feedback else "yes"
 
     def _llm_refine(self, system_prompt: str, *, label: str,

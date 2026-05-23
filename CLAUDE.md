@@ -1,4 +1,4 @@
-# XYR_test 项目协作约定（AI 必读）
+# Orchestra 项目协作约定（AI 必读）
 
 ## 第一条：先读 execution_workflow.md
 
@@ -21,19 +21,17 @@
 
 - **CSV 字段映射** —— 新增 / 修改追踪字段必须同步 `_FIELD_MEANINGS`（tracker.py）+ `docs/parameters_and_changelog.md` 第九章 CSV 字段映射表（~130 条）
 - **硬编码字典** —— `_BANNED_REPLACEMENTS` / `_CLICHE_PAIRS` / `_GENRE_STRICTNESS` 等改动有多处同步点，见 `docs/system_reference.md` 第十八章
-- **CLI 渲染层** —— ui.py / name_generator.py 改动需同步 system_reference.md 第十九章 + parameters_and_changelog.md 第八章硬编码常量 + README 变更日志
 
 ## 第三条：Python 版本
 
-- 固定使用 **Python 3.10**（`py -3.10`），不要使用 3.14
-- 验证命令模板：`py -3.10 -c "import ast; [ast.parse(open(p,encoding='utf-8').read()) for p in [...]]; from xxx import yyy; print('ok')"`
+- 固定使用 **Python 3.10**（`python3`）
+- 验证命令模板：`python3 -c "import ast; [ast.parse(open(p,encoding='utf-8').read()) for p in [...]]; from xxx import yyy; print('ok')"`
 
-## 第四条：CLI 输出走 core/ui.py
+## 第四条：输出走 core/ui.py
 
-- 任何新增 `print` 必须改用 `core/ui.py` 的 `ui.info/warn/success/error/hint/section/banner/...`
-- 输入仍走 `core/prompt_utils.py`（基于 prompt_toolkit）
+- 任何新增输出必须使用 `core/ui.py` 的 `ui.info/warn/success/error/hint/section/banner/...`，通过 WebSocket 推送给前端
+- 输入走 `core/prompt_utils.py`（通过 WebSocket 向前端请求输入）
 - 输入/输出职责分离，不要混用
-- Windows GBK 控制台兼容靠 `core/ui.py` 顶部的 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`，不要绕过
 
 ## 第五条：禁止事项
 

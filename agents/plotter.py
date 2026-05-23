@@ -77,8 +77,8 @@ class PlotAgent(BaseAgent):
         result = self.llm.chat_json(
             system, user_msg, temperature=self._temperature()
         )
-        if isinstance(result, dict) and "chapters" in result:
-            result = result["chapters"]
+        if isinstance(result, dict):
+            result = result.get("chapters", [])
         if not isinstance(result, list):
             raise ValueError(f"Plotter returned unexpected format: {type(result)}")
         for i, plan in enumerate(result):

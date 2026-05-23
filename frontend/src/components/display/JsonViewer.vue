@@ -6,377 +6,175 @@ const props = defineProps<{
   type?: 'world' | 'outline' | 'style' | 'auto'
 }>()
 
-// Resolve the actual world object — it may be nested under "world" key
-const worldObj = computed(() => {
-  const d = props.data
-  if (!d || typeof d !== 'object') return null
-  // holistic directing wraps under "world"
-  if (d.world && typeof d.world === 'object') return d.world
-  // if top-level has setting+rules, it's already the world object
-  if (d.setting && d.rules) return d
-  return null
-})
+// ── 中文标签映射表 ──
 
-const charsList = computed(() => {
-  const d = props.data
-  if (!d) return []
-  // characters at top level (holistic) or inside world
-  const chars = d.characters || (d.world?.characters)
-  if (!Array.isArray(chars)) return []
-  return chars
-})
+const FIELD_LABELS: Record<string, string> = {
+  // 通用
+  name: '名称', description: '描述', status: '状态', type: '类型',
+  content: '内容', purpose: '目的', event: '事件', result: '结果',
+  cause: '起因', time: '时间', scale: '规模', climate: '气候',
+  terrain: '地形', nature: '性质', title: '标题', summary: '概要',
+  role: '角色定位', number: '编号', location: '地点/场景',
 
-const resolvedType = computed(() => {
-  if (props.type && props.type !== 'auto') return props.type
-  if (worldObj.value) return 'world'
-  const d = props.data
-  if (d?.three_act || d?.theme) return 'outline'
-  if (d?.style_name && d?.tone) return 'style'
-  return 'auto'
-})
+  // 世界观
+  tone: '基调', setting: '背景', narrative_perspective: '叙事视角',
+  rules: '核心规则', unique_elements: '世界特色',
+  social_structure: '社会结构', geography: '地理', factions: '势力',
+  history: '历史事件', daily_life: '日常生活',
+  main_locations: '主要地点', political_system: '政治体系',
+  economy: '经济', social_classes: '社会阶层', culture: '文化',
+  clothing_food: '衣食', etiquette: '礼仪', festivals: '节庆', currency: '货币',
+  magic_system: '魔法/力量体系', technology_level: '科技水平',
+  key_figures: '关键人物', period: '时代',
 
-// ── World ──
-const worldScalars = computed(() => {
-  const d = worldObj.value
-  if (!d) return []
-  const items: { label: string; value: string }[] = []
-  if (d.name) items.push({ label: '世界名称', value: d.name })
-  if (d.tone) items.push({ label: '基调', value: d.tone })
-  if (d.setting) items.push({ label: '背景', value: d.setting })
-  if (d.narrative_perspective) items.push({ label: '叙事视角', value: d.narrative_perspective })
-  if (d.rules) items.push({ label: '核心规则', value: d.rules })
-  return items
-})
+  // 角色字段
+  characters: '角色', personality: '性格特点', motivation: '核心动机',
+  arc: '成长弧线', fatal_flaw: '致命缺陷', false_belief: '错误信念',
+  want: '表面渴望', need: '深层需求', ghost: '心魔/旧伤',
+  mbti: 'MBTI', aliases: '别名', biggest_fear: '最大恐惧',
+  inner_desire: '内心渴望', appearance: '外貌', abilities: '能力',
+  background: '背景', growth_plan: '成长弧线', voice: '语言风格',
+  protagonist: '主角', supporting_characters: '配角',
+  currentStatus: '当前状态', health: '健康', location_name: '当前位置',
+  development: '发展', planned: '预设', current: '当前',
+  speech: '语言特征', sample_phrases: '口头禅',
+  physical_traits: '外貌特征', distinguishing_marks: '显著特征',
+  consistency: '一致性', physicalTraits: '外貌一致性', personalityTraits: '性格一致性',
+  speechPatterns: '语言风格一致性',
 
-const worldTags = computed(() => {
-  const el = worldObj.value?.unique_elements
-  if (!Array.isArray(el)) return []
-  return el.slice(0, 8).map(String)
-})
+  // 大纲
+  theme: '主题', ending: '结局方向', three_act: '三幕结构',
+  key_turning_points: '关键转折点', act_1: '第一幕', act_2: '第二幕', act_3: '第三幕',
+  premise: '前提', central_conflict: '核心冲突', climax: '高潮',
+  volumes: '分卷结构', narrative_focus: '叙事焦点',
 
-const worldSocial = computed(() => {
-  const s = worldObj.value?.social_structure
-  if (!s || typeof s !== 'object') return null
-  const map: Record<string, string> = { political_system: '政治体系', economy: '经济', social_classes: '社会阶层', culture: '文化' }
-  const items = Object.entries(map).filter(([k]) => s[k]).map(([k, label]) => ({ label, value: s[k] }))
-  return items.length ? items : null
-})
+  // 章节计划
+  chapter_number: '章节号', emotional_arc: '情绪线',
+  emotional_type: '情绪类型', emotional_intensity: '情绪强度',
+  characters_involved: '涉及角色', foreshadowing: '伏笔',
+  active_plotlines: '活跃线索', act: '所属幕', cliffhanger: '章节钩子',
+  scene_structure: '场景结构', tension_level: '张力等级',
+  previous_link: '承上启下', opening_hook_type: '章首引子类型',
+  ending_hook_type: '章尾悬念类型', characters_on_stage: '实际登场角色',
+  scene_list: '场景列表', plot_points: '情节点',
+  duration: '时长', planned_reveal: '计划揭示', visibility: '可见度',
 
-const worldLocations = computed(() => {
-  const locs = worldObj.value?.geography?.main_locations
-  if (!Array.isArray(locs)) return []
-  return locs.slice(0, 8)
-})
+  // 风格
+  style_name: '风格名称', genre: '类型',
+  pacing: '节奏', plot: '剧情', character: '角色',
+  worldbuilding: '世界观构建', review: '审核', editing: '编辑',
+  style_presets: '风格预设', requirements: '写作规范',
+  overall: '整体', language: '语言风格', sentence_structure: '句式',
+  imagery: '意象', speed: '节奏速度', hooks_per_chapter: '每章钩子数',
+  cliffhanger_style: '悬念风格', dialogue_style: '对话风格',
+  depth: '深度', growth_pace: '成长节奏', detail_level: '细节密度',
+  exposition_style: '展现方式', priority: '优先级', focus: '侧重点',
+  detected: '检测项', anti_ai_banned_words: '禁用词',
+  genre_conventions: '类型惯例', taboos: '禁忌',
+  style_rules: '风格规则', dialogue_rules: '对话规则',
+  suggestions: '建议', agent_temperatures: 'Agent温度',
+  genre_knowledge: '类型知识库',
+  quality_gates: '质量红线',
 
-const worldFactions = computed(() => {
-  const f = worldObj.value?.factions
-  if (!Array.isArray(f)) return []
-  return f.slice(0, 8)
-})
-
-const worldHistory = computed(() => {
-  const h = worldObj.value?.history
-  if (!Array.isArray(h)) return []
-  return h.slice(0, 5)
-})
-
-const worldDaily = computed(() => {
-  const dl = worldObj.value?.daily_life
-  if (!dl || typeof dl !== 'object') return null
-  const map: Record<string, string> = { clothing_food: '衣食', etiquette: '礼仪', festivals: '节庆', currency: '货币' }
-  const items = Object.entries(dl).filter(([, v]) => v).map(([k, v]) => ({ label: map[k] || k, value: String(v) }))
-  return items.length ? items : null
-})
-
-// ── Characters ──
-// Extract key fields from complex character objects into displayable sections
-const charSections = ['appearance', 'abilities', 'background', 'growth_plan', 'voice'] as const
-const charSectionLabels: Record<string, string> = {
-  appearance: '外貌', abilities: '能力', background: '背景', growth_plan: '成长弧线', voice: '语言风格',
+  // 关系/追踪
+  allies: '盟友', enemies: '敌人', romantic: '恋爱', family: '家人',
+  mentors: '导师', relationships: '关系', factions_list: '势力列表',
+  conflicts: '冲突', active: '活跃', resolved: '已解决', upcoming: '即将发生',
+  foreshadowing_list: '伏笔列表', planted: '已埋设', retired: '已回收',
+  storyTime: '故事时间', events: '事件', currentState: '当前状态',
+  mainPlotStage: '主线阶段', plotlines: '线索', checkpoints: '检查点',
 }
 
-function flattenObj(obj: any, prefix = ''): { label: string; value: string }[] {
-  if (!obj || typeof obj !== 'object') return []
-  const items: { label: string; value: string }[] = []
-  for (const [k, v] of Object.entries(obj)) {
-    if (!v) continue
-    const key = prefix ? `${prefix}.${k}` : k
-    if (typeof v === 'object' && !Array.isArray(v)) {
-      items.push(...flattenObj(v, key))
-    } else {
-      const val = Array.isArray(v) ? v.join('、') : String(v)
-      if (val.length > 500) {
-        items.push({ label: key, value: val.slice(0, 500) + '...' })
+function label(key: string): string {
+  return FIELD_LABELS[key] || key
+}
+
+// 分类：将 entries 按类型分为两组
+// scalars = 字符串/数字/布尔/字符串数组（合并到一个 descriptions 表格）
+// complex = 对象数组/嵌套对象（各自独立成块）
+function classifyEntries(obj: any) {
+  const scalars: { key: string; val: any; kind: 'scalar' | 'tags' }[] = []
+  const complex: { key: string; val: any; kind: 'objectArray' | 'object' }[] = []
+
+  if (!obj || typeof obj !== 'object') return { scalars, complex }
+
+  for (const [key, val] of Object.entries(obj)) {
+    if (val == null) continue
+    if (Array.isArray(val)) {
+      if (val.length === 0) continue
+      if (val.every((x: any) => typeof x === 'string')) {
+        scalars.push({ key, val, kind: 'tags' })
+      } else if (val.every((x: any) => x && typeof x === 'object' && !Array.isArray(x))) {
+        complex.push({ key, val, kind: 'objectArray' })
       } else {
-        items.push({ label: key, value: val })
+        scalars.push({ key, val, kind: 'tags' })
       }
+    } else if (typeof val === 'object') {
+      complex.push({ key, val, kind: 'object' })
+    } else {
+      scalars.push({ key, val, kind: 'scalar' })
     }
   }
-  return items
+  return { scalars, complex }
 }
 
-// ── Outline ──
-const outlineScalars = computed(() => {
-  const d = props.data
-  if (!d) return []
-  const items: { label: string; value: string }[] = []
-  if (d.theme) items.push({ label: '主题', value: d.theme })
-  if (d.ending) items.push({ label: '结局方向', value: d.ending })
-  return items
-})
-
-const outlineActs = computed(() => {
-  const ta = props.data?.three_act
-  if (!ta || typeof ta !== 'object') return []
-  return Object.entries(ta).map(([k, v]) => ({ label: k, value: String(v) }))
-})
-
-const outlineTurning = computed(() => {
-  const tp = props.data?.key_turning_points
-  if (!Array.isArray(tp)) return []
-  return tp.map(String)
-})
-
-// ── Style ──
-const styleScalars = computed(() => {
-  const d = props.data
-  if (!d) return []
-  const items: { label: string; value: string }[] = []
-  if (d.style_name) items.push({ label: '风格名称', value: d.style_name })
-  if (d.tone && typeof d.tone === 'object') {
-    const map: Record<string, string> = { overall: '整体基调', language: '语言风格', sentence_structure: '句式', imagery: '意象' }
-    for (const [k, v] of Object.entries(d.tone)) {
-      if (v) items.push({ label: map[k] || k, value: String(v) })
-    }
-  }
-  if (d.setting?.genre) items.push({ label: '类型', value: d.setting.genre })
-  return items
-})
-
-const styleSubSections = ['pacing', 'plot', 'character', 'worldbuilding', 'review', 'editing'] as const
-const styleSectionLabels: Record<string, string> = {
-  pacing: '节奏', plot: '剧情', character: '角色', worldbuilding: '世界观构建', review: '审核', editing: '编辑',
+function getTitle(item: any): string {
+  if (!item || typeof item !== 'object') return ''
+  return item.name || item.title || item.event || item.type || ''
 }
-
-const styleTagsGroups = computed(() => {
-  const d = props.data
-  const groups: { label: string; items: string[] }[] = []
-  const add = (label: string, arr: any) => { if (Array.isArray(arr) && arr.length) groups.push({ label, items: arr.slice(0, 10).map(String) }) }
-  add('类型惯例', d?.setting?.genre_conventions)
-  add('禁忌', d?.setting?.taboos)
-  add('写作规范', d?.requirements?.detected)
-  add('禁用词', d?.requirements?.anti_ai_banned_words)
-  add('风格规则', d?.style_presets?.style_rules)
-  add('对话规则', d?.style_presets?.dialogue_rules)
-  return groups
-})
 </script>
 
 <template>
   <div v-if="!data || typeof data !== 'object'" class="jv-empty">暂无数据</div>
+  <template v-else>
+    <template v-for="([groupKey, entries], gi) in [['scalars', classifyEntries(data).scalars], ['complex', classifyEntries(data).complex]]" :key="groupKey">
 
-  <!-- ═══ World ═══ -->
-  <template v-else-if="resolvedType === 'world'">
-    <!-- Top-level scalars -->
-    <n-descriptions v-if="worldScalars.length" bordered :column="1" label-placement="left" size="small">
-      <n-descriptions-item v-for="s in worldScalars" :key="s.label" :label="s.label">{{ s.value }}</n-descriptions-item>
-    </n-descriptions>
-
-    <!-- Unique elements -->
-    <div v-if="worldTags.length" class="jv-tags">
-      <span class="jv-tag-label">世界特色</span>
-      <n-tag v-for="(t, i) in worldTags" :key="i" size="small" round>{{ t }}</n-tag>
-    </div>
-
-    <!-- Social structure -->
-    <template v-if="worldSocial">
-      <div class="jv-sub-title">社会结构</div>
-      <n-descriptions bordered :column="2" label-placement="left" size="small">
-        <n-descriptions-item v-for="s in worldSocial" :key="s.label" :label="s.label">{{ s.value }}</n-descriptions-item>
-      </n-descriptions>
-    </template>
-
-    <!-- Locations -->
-    <template v-if="worldLocations.length">
-      <div class="jv-sub-title">主要地点 ({{ worldLocations.length }})</div>
-      <n-list bordered size="small">
-        <n-list-item v-for="loc in worldLocations" :key="loc.name">
-          <n-thing>
-            <template #header>{{ loc.name }}</template>
-            <template #description>{{ loc.description }}</template>
-            <template #footer>
-              <n-space size="small">
-                <n-tag v-if="loc.climate" size="tiny">{{ loc.climate }}</n-tag>
-                <n-tag v-if="loc.terrain" size="tiny" type="info">{{ loc.terrain }}</n-tag>
+      <!-- Scalar group: one unified descriptions table -->
+      <n-descriptions v-if="groupKey === 'scalars' && entries.length" bordered :column="1" label-placement="left" size="small" class="jv-table">
+        <template v-for="s in entries" :key="s.key">
+          <n-descriptions-item :label="label(s.key)">
+            <template v-if="s.kind === 'tags'">
+              <n-space size="small" wrap>
+                <n-tag v-for="(t, i) in s.val" :key="i" size="small" round>{{ typeof t === 'string' ? t : String(t) }}</n-tag>
               </n-space>
             </template>
-          </n-thing>
-        </n-list-item>
-      </n-list>
-    </template>
-
-    <!-- Factions -->
-    <template v-if="worldFactions.length">
-      <div class="jv-sub-title">势力 ({{ worldFactions.length }})</div>
-      <n-list bordered size="small">
-        <n-list-item v-for="f in worldFactions" :key="f.name">
-          <n-thing>
-            <template #header>{{ f.name }}</template>
-            <template #description>{{ f.nature }} · {{ f.purpose }}</template>
-            <template #footer>
-              <n-space size="small">
-                <n-tag v-if="f.scale" size="tiny">{{ f.scale }}</n-tag>
-                <n-tag v-for="fig in (f.key_figures || []).slice(0, 3)" :key="fig" size="tiny" type="info">{{ fig }}</n-tag>
-              </n-space>
+            <template v-else>
+              <span class="jv-text">{{ s.val }}</span>
             </template>
-          </n-thing>
-        </n-list-item>
-      </n-list>
-    </template>
-
-    <!-- History -->
-    <template v-if="worldHistory.length">
-      <div class="jv-sub-title">历史事件</div>
-      <n-list bordered size="small">
-        <n-list-item v-for="h in worldHistory" :key="h.event">
-          <n-thing>
-            <template #header>{{ h.event }}</template>
-            <template #description>{{ h.result }}</template>
-            <template #footer>
-              <n-space size="small">
-                <n-tag v-if="h.time" size="tiny">{{ h.time }}</n-tag>
-                <n-tag v-if="h.cause" size="tiny" type="info">起因：{{ h.cause }}</n-tag>
-              </n-space>
-            </template>
-          </n-thing>
-        </n-list-item>
-      </n-list>
-    </template>
-
-    <!-- Daily life -->
-    <template v-if="worldDaily">
-      <div class="jv-sub-title">日常生活</div>
-      <n-descriptions bordered :column="2" label-placement="left" size="small">
-        <n-descriptions-item v-for="d in worldDaily" :key="d.label" :label="d.label">{{ d.value }}</n-descriptions-item>
-      </n-descriptions>
-    </template>
-
-    <!-- Characters -->
-    <template v-if="charsList.length">
-      <div class="jv-sub-title">角色 ({{ charsList.length }})</div>
-      <n-collapse>
-        <n-collapse-item v-for="c in charsList" :key="c.name" :title="`${c.name}（${c.role || '角色'}）`" :name="c.name">
-          <n-descriptions bordered :column="1" label-placement="left" size="small">
-            <n-descriptions-item v-if="c.personality" label="性格">{{ c.personality }}</n-descriptions-item>
-            <n-descriptions-item v-if="c.motivation" label="动机">{{ c.motivation }}</n-descriptions-item>
-            <n-descriptions-item v-if="c.arc" label="成长弧线">{{ c.arc }}</n-descriptions-item>
-            <n-descriptions-item v-if="c.fatal_flaw" label="致命缺陷">{{ c.fatal_flaw }}</n-descriptions-item>
-            <n-descriptions-item v-if="c.aliases?.length" label="别名">{{ c.aliases.join('、') }}</n-descriptions-item>
-          </n-descriptions>
-          <n-collapse v-if="charSections.some(s => c[s])" style="margin-top: 8px">
-            <n-collapse-item v-for="sec in charSections" :key="sec" :title="charSectionLabels[sec]" :name="sec">
-              <n-descriptions v-if="c[sec] && typeof c[sec] === 'object' && !Array.isArray(c[sec])" bordered :column="1" label-placement="left" size="small">
-                <n-descriptions-item v-for="item in flattenObj(c[sec])" :key="item.label" :label="item.label">{{ item.value }}</n-descriptions-item>
-              </n-descriptions>
-              <n-text v-else>{{ c[sec] }}</n-text>
-            </n-collapse-item>
-          </n-collapse>
-        </n-collapse-item>
-      </n-collapse>
-    </template>
-
-    <!-- Raw fallback -->
-    <n-collapse class="jv-raw">
-      <n-collapse-item title="完整原始数据" name="raw">
-        <n-code :code="JSON.stringify(data, null, 2)" language="json" word-wrap />
-      </n-collapse-item>
-    </n-collapse>
-  </template>
-
-  <!-- ═══ Outline ═══ -->
-  <template v-else-if="resolvedType === 'outline'">
-    <n-descriptions v-if="outlineScalars.length" bordered :column="1" label-placement="left" size="small">
-      <n-descriptions-item v-for="s in outlineScalars" :key="s.label" :label="s.label">{{ s.value }}</n-descriptions-item>
-    </n-descriptions>
-
-    <template v-if="outlineActs.length">
-      <div class="jv-sub-title">三幕结构</div>
-      <n-descriptions bordered :column="1" label-placement="top" size="small">
-        <n-descriptions-item v-for="a in outlineActs" :key="a.label" :label="a.label">{{ a.value }}</n-descriptions-item>
-      </n-descriptions>
-    </template>
-
-    <template v-if="outlineTurning.length">
-      <div class="jv-sub-title">关键转折点</div>
-      <n-list bordered size="small">
-        <n-list-item v-for="(t, i) in outlineTurning" :key="i">
-          <n-text>{{ t }}</n-text>
-        </n-list-item>
-      </n-list>
-    </template>
-
-    <n-collapse class="jv-raw">
-      <n-collapse-item title="完整原始数据" name="raw">
-        <n-code :code="JSON.stringify(data, null, 2)" language="json" word-wrap />
-      </n-collapse-item>
-    </n-collapse>
-  </template>
-
-  <!-- ═══ Style ═══ -->
-  <template v-else-if="resolvedType === 'style'">
-    <n-descriptions v-if="styleScalars.length" bordered :column="1" label-placement="left" size="small">
-      <n-descriptions-item v-for="s in styleScalars" :key="s.label" :label="s.label">{{ s.value }}</n-descriptions-item>
-    </n-descriptions>
-
-    <template v-for="secKey in styleSubSections" :key="secKey">
-      <template v-if="data[secKey] && typeof data[secKey] === 'object'">
-        <div class="jv-sub-title">{{ styleSectionLabels[secKey] }}</div>
-        <n-descriptions bordered :column="1" label-placement="left" size="small">
-          <n-descriptions-item v-for="(v, k) in data[secKey]" :key="k" :label="k">
-            <template v-if="typeof v === 'string'">{{ v }}</template>
-            <template v-else>{{ v }}</template>
           </n-descriptions-item>
-        </n-descriptions>
+        </template>
+      </n-descriptions>
+
+      <!-- Complex group: each item gets its own block -->
+      <template v-if="groupKey === 'complex'">
+        <template v-for="c in entries" :key="c.key">
+          <!-- Array of objects -->
+          <template v-if="c.kind === 'objectArray'">
+            <div class="jv-sub-title">{{ label(c.key) }}（{{ c.val.length }}）</div>
+            <n-collapse>
+              <n-collapse-item v-for="(item, i) in c.val" :key="i" :title="getTitle(item) || `${label(c.key)} ${i + 1}`" :name="`${c.key}-${i}`">
+                <JsonViewer :data="item" type="auto" />
+              </n-collapse-item>
+            </n-collapse>
+          </template>
+
+          <!-- Nested object -->
+          <template v-else-if="c.kind === 'object'">
+            <div class="jv-sub-title">{{ label(c.key) }}</div>
+            <div class="jv-indent">
+              <JsonViewer :data="c.val" type="auto" />
+            </div>
+          </template>
+        </template>
       </template>
     </template>
-
-    <template v-for="tg in styleTagsGroups" :key="tg.label">
-      <div class="jv-tags">
-        <span class="jv-tag-label">{{ tg.label }}</span>
-        <n-tag v-for="t in tg.items" :key="t" size="small" round>{{ t }}</n-tag>
-      </div>
-    </template>
-
-    <!-- Genre knowledge (long text) -->
-    <template v-if="data?.setting?.genre_knowledge">
-      <n-collapse style="margin-top: 12px">
-        <n-collapse-item title="类型知识库" name="genre_knowledge">
-          <n-text style="white-space: pre-wrap">{{ data.setting.genre_knowledge }}</n-text>
-        </n-collapse-item>
-      </n-collapse>
-    </template>
-
-    <n-collapse class="jv-raw">
-      <n-collapse-item title="完整原始数据" name="raw">
-        <n-code :code="JSON.stringify(data, null, 2)" language="json" word-wrap />
-      </n-collapse-item>
-    </n-collapse>
-  </template>
-
-  <!-- ═══ Auto fallback ═══ -->
-  <template v-else>
-    <n-collapse>
-      <n-collapse-item title="数据" name="raw">
-        <n-code :code="JSON.stringify(data, null, 2)" language="json" word-wrap />
-      </n-collapse-item>
-    </n-collapse>
   </template>
 </template>
 
 <style scoped>
 .jv-empty { color: rgba(255,255,255,0.3); text-align: center; padding: 16px; }
-.jv-sub-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-top: 16px; margin-bottom: 6px; }
-.jv-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
-.jv-tag-label { font-size: 12px; color: rgba(255,255,255,0.4); margin-right: 4px; }
-.jv-raw { margin-top: 16px; }
+.jv-sub-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-top: 14px; margin-bottom: 6px; }
+.jv-indent { margin-left: 8px; padding-left: 8px; border-left: 2px solid rgba(255,255,255,0.08); }
+.jv-text { white-space: pre-wrap; line-height: 1.7; }
+.jv-table { margin-bottom: 4px; }
 </style>

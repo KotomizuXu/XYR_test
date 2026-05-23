@@ -15,39 +15,23 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-
 class Spinner:
-    """Simple terminal spinner for long-running operations."""
+    """No-op spinner. Progress is handled by the Web output layer."""
 
     def __init__(self, message: str = "思考中"):
-        self.message = message
-        self._stop = threading.Event()
-        self._thread = None
+        pass
 
     def start(self):
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
+        pass
 
     def stop(self):
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
-        sys.stdout.write("\r" + " " * 60 + "\r")
-        sys.stdout.flush()
+        pass
 
-    def _spin(self):
-        i = 0
-        start = time.time()
-        while not self._stop.is_set():
-            elapsed = int(time.time() - start)
-            frame = SPINNER_FRAMES[i % len(SPINNER_FRAMES)]
-            sys.stdout.write(f"\r  {frame} {self.message}... {elapsed}s")
-            sys.stdout.flush()
-            i += 1
-            self._stop.wait(0.15)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
 
 
 def parse_json(text: str) -> dict | list:
@@ -207,7 +191,11 @@ class LLMClient:
             if response.stop_reason != "max_tokens":
                 return text
             logger.warning("JSON response still truncated after retry")
-        return existing_text
+        raise ValueError(
+            f"JSON response truncated after {max_continuations} retries "
+            f"({len(existing_text)} chars received). "
+            f"Consider increasing max_tokens or reducing output complexity."
+        )
 
     def _continue_text(self, system_prompt: str, user_message: str, existing_text: str, temperature: float, max_tokens: int, max_continuations: int = 3) -> str:
         """Continue a truncated text response."""

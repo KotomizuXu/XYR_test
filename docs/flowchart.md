@@ -4,7 +4,7 @@
 > 字段链路细节请查阅 `docs/system_reference.md`，参数与硬编码常量请查阅 `docs/parameters_and_changelog.md`，AI 验证协议请查阅 `docs/verification_protocol.md`。
 > **接到需求的执行流程请先读 `docs/execution_workflow.md`**。
 >
-> *最后验证：2026-05-21*
+> *最后验证：2026-05-23*
 
 ## 主流程
 

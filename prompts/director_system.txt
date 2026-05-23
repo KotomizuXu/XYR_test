@@ -115,11 +115,6 @@
     "ending": "结局类型和方向",
     "key_turning_points": ["关键转折点1", "关键转折点2", "关键转折点3"],
     "volumes": [{"number": 1, "title": "卷名", "description": "本卷叙事焦点（100-200字）"}]
-  },
-  "style": {
-    "tone_guidance": "文风指导（如紧凑、细腻、幽默等）",
-    "reference_works": "参考作品风格",
-    "target_words_per_chapter": "每章目标字数"
   }
 }
 

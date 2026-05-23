@@ -221,7 +221,7 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 
 | 规则 | 定义位置 | 作用 |
 |------|---------|------|
-| `_BANNED_REPLACEMENTS`（约 60 个词） | tracker.py | AI 高频词自动替换（如"然而"→"但是"） |
+| `_BANNED_REPLACEMENTS`（81 个词） | tracker.py | AI 高频词自动替换（如"然而"→"但是"） |
 | `_EMPTY_PHRASES`（6 个短语） | tracker.py | 空洞短语自动删除（如"广泛关注"） |
 | `_ABSTRACT_NOUNS`（8 个词） | tracker.py | 抽象名词检测报告（如"价值"、"认知"） |
 | `_SENTENCE_RULES` | tracker.py | 连续长句≥4句/连续短句≥5句告警 |
@@ -266,20 +266,18 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 追踪文件初始化检查范围 | 全部 6 个 `_TRACKING_FILES` + `config.json` | pipeline.py Phase 2.5 |
 | 追踪文件初始化策略 | 仅初始化磁盘上不存在的文件（保护已有数据） | tracker.py `init_tracking(missing=None)` |
 | JSON 原子写入 | tmp+replace 模式（state.json / world.json / outline.json / chapters.json / tracking/*.json / review_reports/*.json） | state_manager.py `atomic_write_json` |
-| 小说名长度上限 | 64 字符 | main.py `_MAX_NAME_LENGTH` |
-| 小说名非法字符 | `\\ / : * ? " < > \|` + Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9） + 尾部 `.`/空格 | main.py `_sanitize_novel_name` |
-| 交互输入封装库 | prompt_toolkit ≥3.0（跨平台 TUI，替代 readline） | core/prompt_utils.py |
-| 多行输入提交快捷键 | Ctrl+D 或 Esc + Enter | core/prompt_utils.py `_multiline_bindings` |
-| 单行输入提交快捷键 | Enter（Ctrl+D 视为提交当前内容） | core/prompt_utils.py `_single_bindings` |
-| 用户中断信号 | Ctrl+C → 抛 `UserAbort`（自定义异常，非 `KeyboardInterrupt`） | core/prompt_utils.py `UserAbort` |
-| 终端渲染层 | rich ≥13.0（Panel/Table/Progress/Console，统一所有 CLI 输出） | core/ui.py |
-| Windows 控制台编码 | 启动时 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` | core/ui.py（首行 `if sys.platform == "win32"`） |
+| 小说名长度上限 | 64 字符 | core/name_generator.py `_MAX_NAME_LENGTH` |
+| 小说名非法字符 | `\\ / : * ? " < > \|` + Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9） + 尾部 `.`/空格 + Unicode 控制字符 | core/name_generator.py `sanitize_novel_name` |
+| 交互输入层 | WebSocket 双向通信（`_send_input_request` → 前端 → 响应匹配） | core/prompt_utils.py |
+| 用户中断信号 | `UserAbort` 异常（前端取消 / WebSocket 断开时触发） | core/prompt_utils.py `UserAbort` |
+| 会话管理 | `threading.local()` 绑定当前线程的 BridgeSession | core/prompt_utils.py |
+| 输出层 | WebSocket 输出队列（`_send_output` → `output_queue` → 前端） | core/ui.py |
 | AI 小说名候选数量 | `3` | core/name_generator.py `suggest_novel_names(..., n=3)` |
 | AI 起名温度 | `0.9` | core/name_generator.py `suggest_novel_names` |
 | AI 起名候选最长字符数 | `12` | core/name_generator.py `_clean_candidate` |
-| Braindump 章节温度 | `0.7`（初版/调整）/ `0.9`（rewrite） | main.py `_braindump_section` |
-| Braindump system 构造 | `_build_braindump_system(style, is_rewrite)` 拼三段：`_BRAINDUMP_SYSTEM_BASE` + 可选 `_BRAINDUMP_STYLE_GUIDANCE`（style 注入）+ `_BRAINDUMP_NEUTRAL_TAIL` + 可选 `_REWRITE_DIRECTIVE` | main.py |
-| Braindump rewrite 反上下文 | rewrite 分支把 `prev_result` 拼到 user_msg "之前生成的{label}（用户不满意，请勿沿用此方向）" | main.py `_braindump_section` |
+| Braindump 章节温度 | `0.7`（初版/调整）/ `0.9`（rewrite） | core/braindump.py `_braindump_section` |
+| Braindump system 构造 | `_build_braindump_system(style, is_rewrite)` 拼三段：`_BRAINDUMP_SYSTEM_BASE` + 可选 `_BRAINDUMP_STYLE_GUIDANCE`（style 注入）+ `_BRAINDUMP_NEUTRAL_TAIL` + 可选 `_REWRITE_DIRECTIVE` | core/braindump.py |
+| Braindump rewrite 反上下文 | rewrite 分支把 `prev_result` 拼到 user_msg "之前生成的{label}（用户不满意，请勿沿用此方向）" | core/braindump.py `_braindump_section` |
 | Writer rewrite 温度 | `min(self._temperature() + 0.15, 0.9)`（基于初稿温度上调） | agents/writer.py `rewrite` |
 | Writer rewrite system 增强 | `_build_system_prompt(..., is_rewrite=True)` 在 system 尾部追加"## 重写专项要求"段（强调实质性改写，不能字面微调） | agents/writer.py |
 | 精修阶段 system_prompt | 5 个常量：4 个 per-block（world/character/location/outline）+ `REFINE_HOLISTIC_PROMPT`（全量精修）+ `REFINE_REWRITE_DIRECTIVE`（rewrite 时拼接到 system） | core/refine_prompts.py |
@@ -292,8 +290,8 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | WebSocket 路径 | `/ws`（双向 JSON 协议：output / input_request / session_started / session_ended） | web/app.py |
 | REST API 前缀 | `/api`（novels 列表/详情/章节内容） | web/routers/novels.py |
 | 前端静态文件 | `frontend/dist/`（Vue3 SPA 构建产物，由 FastAPI 直接服务） | web/app.py |
-| 桥接层注入时机 | `install_web_bridge()` 必须在 `import core.pipeline` 之前执行 | web/bridge/__init__.py |
-| 桥接层线程隔离 | `threading.local()` 绑定当前线程的 BridgeSession | web/bridge/web_prompt.py |
+| 桥接层 | 猴子补丁已移除，core/prompt_utils.py 和 core/ui.py 已是 Web 原生实现 | web/bridge/__init__.py |
+| 会话线程隔离 | `threading.local()` 绑定当前线程的 BridgeSession | web/bridge/session.py |
 
 ---
 
@@ -831,3 +829,42 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 类型 | 说明 | 位置 |
 |------|------|------|------|
 | #158 | Bug | Writer rewrite prompt 要求"保持原有好内容，只修改有问题的部分"，LLM 只做表面微调不解决实际问题，导致审核多次不通过但问题不变 | `agents/writer.py` — rewrite prompt 改为 7 条强制实质性重写指令，按 major/warning 区分处理力度；重写温度从 +0.15 提高到 +0.25（上限 0.95） |
+
+### 2026-05-23 自检修复（#159-#166）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #159 | 中等 | tracker.py `_BANNED_REPLACEMENTS` 与 writer/editor/reviewer/style_advisor 四个 prompt 禁用词列表显著不同步，writer 仅 12 词而 tracker 有 60+ | `core/tracker.py` — 补入 writer 12 词 + editor 7 词（共 81 条）；四个 prompt 统一标注"完整列表由 tracker 自动替换" |
+| #160 | 轻微 | director_system.txt 输出 `style` 顶级字段但无消费者（功能已被 StyleAdvisor 替代） | `prompts/director_system.txt` — 删除 style 字段定义；`core/pipeline.py` `_split_director_output` — pop legacy style field |
+| #161 | 轻微 | `agents/plotter.py:81` 使用 `result["chapters"]` 直接访问 | `agents/plotter.py` — 改为 `result.get("chapters", [])` |
+| #162 | 轻微 | `NovelState`/`ChapterState`/`VolumeDef` 部分核心字段无默认值 | `core/state_manager.py` — 全部字段补默认值 |
+| #163 | 轻微 | `sanitize_novel_name` 未校验 Unicode 控制字符和零宽字符 | `core/name_generator.py` — 添加 `\x00-\x1f`/`\x7f`/零宽字符检查 |
+| #164 | 轻微 | `_split_director_output` 使用整体赋值，未过滤 LLM 返回的意外字段 | `core/pipeline.py` — 增加 `known_world_keys` 白名单过滤 |
+| #165 | 轻微 | `param_confirmed` 消息在前端被 displayMessages 过滤导致不可见 | `frontend/src/views/NovelDetailView.vue` — 从过滤列表中移除 |
+| #166 | 轻微 | `SessionManager.get()` 未加锁，存在理论竞态条件 | `web/bridge/session.py` — get() 方法加 `with self._lock` |
+
+### 2026-05-23 Web 精修数据无变化修复（#167-#169）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #167 | 严重 | Web 模式下 `_send_input_request` 收到不匹配 `request_id` 的响应后 `break` 退出循环并抛出 `WebUserAbort`，导致精修"调整"操作被静默转为"确认"（数据不变） | `web/bridge/web_prompt.py` — `break` 改 `continue`，删除循环后 `raise WebUserAbort()` |
+| #168 | 中等 | `_continue_json` 重试耗尽后返回截断原文，`parse_json` 可能解析出看似完整但实际不完整的 JSON | `core/llm_client.py` — `return existing_text` 改为 `raise ValueError(...)` |
+| #169 | 轻微 | `_split_director_output` 的 `known_world_keys` 白名单仅 11 键，LLM 生成的其他键（如 `theme`/`premise`）被静默丢弃；修订 #164 的白名单方案改为排除法 | `core/pipeline.py` — 白名单改为 `_EXCLUDE_KEYS` 排除法，保留所有非顶层键 |
+
+### 2026-05-23 移除 CLI，统一 Web 架构（#170）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #170 | 重构 | 删除所有 CLI 端逻辑，统一为 Web-only 架构 | `main.py` — 删除；`core/braindump.py` — 新建（从 main.py 提取 braindump 逻辑）；`core/prompt_utils.py` — 重写为 WebSocket 原生输入；`core/ui.py` — 重写为 WebSocket 原生输出；`core/llm_client.py` — Spinner 改为无操作；`web/app.py` — 更新导入路径；`web/bridge/__init__.py` — 猴子补丁逻辑移除；`web/bridge/web_prompt.py` + `web/bridge/web_ui.py` — 删除（合并到 core）；`requirements.txt` — 移除 prompt_toolkit 和 rich |
+
+### 2026-05-23 剧情拆章大纲 + 章节正文展示
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|---------|
+| #171 | 体验 | 剧情拆章 Tab 仅显示章节号+标题，PlotAgent 生成的丰富计划数据（摘要/张力/情绪/场景/角色/伏笔等）不可见；章节正文无法在页面内查看 | `web/routers/novels.py` — `get_novel_detail` 返回值新增 `chapter_plans` 字段；`frontend/src/views/NovelDetailView.vue` — plotting Tab 改为完整大纲卡片（每章展示摘要/张力/情绪曲线/场景结构/情节点/角色/伏笔/悬念等），writing/complete Tab 每章新增"阅读"按钮，点击后右侧 Drawer 展示正文内容 |
+| #172 | Bug | 独立详情页（`/novel/:name`）有会话时 Tab 数据不刷新，用户修改意见后实时日志更新但 Tab 停留在首次加载 | `frontend/src/views/NovelDetailView.vue` — 新增 `watch(hasSession)` 在会话激活时启动 5s 定时刷新 |
+| #173 | 严重 | WebSocket 断连（刷新页面）时精修循环 `UserAbort` 被当作用户确认，phase 跳到下一阶段，用户失去继续精修机会 | `core/pipeline.py` — `_refine_block` 捕获 `UserAbort` 时设置 `self._interrupted = True`；所有 `_refine_*` 调用方在 `if self._interrupted` 分支保存已调整数据但不推进 phase |
+| #174 | 功能 | 新增阶段回滚 API，支持将小说回滚到 collecting_params / directing / plotting / writing 任意阶段，清理后续阶段产出的文件和状态数据 | `web/routers/novels.py` — 新增 `POST /api/novels/{name}/rollback`；`frontend/src/views/NovelDetailView.vue` — 各已完成 Tab 添加回滚按钮 + 确认框 |
+| #175 | 严重 | `_confirm_refine` 内部两处 `except UserAbort: return "yes"` 吞掉异常，导致 `_refine_block` 的 `except UserAbort: self._interrupted = True` 为死代码（#173 修复无效） | `core/pipeline.py` `_confirm_refine` — 移除两处 `except UserAbort`，让异常传播到 `_refine_block` 正确设置 `_interrupted` |
+| #176 | Bug | `watch(hasSession)` 写在 `const hasSession` 之前，`const` 暂时性死区导致运行时 ReferenceError，页面白屏 | `frontend/src/views/NovelDetailView.vue` — 将 `watch(hasSession)` 移到 `hasSession` 定义之后 |
+| #177 | Bug | 精修过程中调整后的数据只存在于内存，REST API 轮询读不到最新数据，Tab 不更新 | `core/pipeline.py` — `_refine_block` 新增 `on_update` 回调参数，每次调整/重写后调用；`_run_directing_holistic` 传入 `on_update=lambda r: self._split_director_output(state, r)` 实时写盘 |

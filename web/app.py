@@ -10,12 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# 关键：在导入 pipeline 之前安装桥接层
-from web.bridge import install_web_bridge
-install_web_bridge()
-
 from web.bridge.session import BridgeSession, session_manager
-from web.bridge.web_prompt import set_current_session, WebUserAbort
+from core.prompt_utils import set_current_session, UserAbort as WebUserAbort
 from web.routers import novels
 
 app = FastAPI(title="Novel Agent Web")
@@ -146,16 +142,15 @@ def _run_pipeline(session: BridgeSession, mode: str, params: dict):
 
     try:
         if mode == "new":
-            from main import _braindump, _extract_negative_constraints
+            from core.braindump import braindump, extract_negative_constraints
             from core.pipeline import NovelPipeline
 
             idea = params.get("story_idea", "")
             name = params.get("novel_name", "untitled")
             style = params.get("style") or None
 
-            # braindump
-            enriched_idea = _braindump(idea, name, style)
-            style = _extract_negative_constraints(enriched_idea, style)
+            enriched_idea = braindump(idea, name, style)
+            style = extract_negative_constraints(enriched_idea, style)
 
             pipeline = NovelPipeline()
             pipeline.start_new_novel(enriched_idea, name, style=style)

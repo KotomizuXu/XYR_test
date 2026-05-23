@@ -69,6 +69,8 @@ def sanitize_novel_name(name: str) -> tuple[bool, str]:
     name = name.strip()
     if not name:
         return False, "小说名称不能为空"
+    if any(ord(c) < 0x20 or ord(c) == 0x7f or c in ('​', '‌', '‍', '﻿') for c in name):
+        return False, "小说名称包含不可见控制字符，请重新输入"
     if len(name) > _MAX_NAME_LENGTH:
         return False, f"小说名称过长（>{_MAX_NAME_LENGTH} 字符），请使用更短的名字"
     bad = [c for c in name if c in _INVALID_CHARS]

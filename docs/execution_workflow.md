@@ -96,15 +96,14 @@
 
 | 验证项 | 命令 / 工具 | 何时必跑 |
 |--------|------------|---------|
-| ① 语法 + 导入 | `py -3.10 -c "import ast; [ast.parse(open(p,encoding='utf-8').read()) for p in [...]]; from xxx import yyy; print('ok')"` | 任何代码变更 |
-| ② CLI 冒烟 | `py -3.10 main.py status`（或最贴近改动的命令） | 改了 main.py / pipeline.py / ui.py |
-| ③ 单测 / Repl 验证 | `py -3.10 -c "from xxx import f; assert f(...) == ..."` | 改了纯函数（如 `_clean_candidate`、`_sanitize_novel_name`） |
-| ④ 视觉冒烟 | 跑实际命令观察输出 | 改了 ui.py / Rich Panel / Table |
-| ⑤ 数据链路追溯 | 按 `docs/verification_protocol.md` 第二章相关项执行 | 改了 prompt schema / context_manager / tracker |
+| ① 语法 + 导入 | `python3 -c "import ast; [ast.parse(open(p,encoding='utf-8').read()) for p in [...]]; from xxx import yyy; print('ok')"` | 任何代码变更 |
+| ② Web 启动冒烟 | `python3 web_main.py`（确认无导入错误） | 改了 pipeline.py / ui.py / prompt_utils.py |
+| ③ 单测 / Repl 验证 | `python3 -c "from xxx import f; assert f(...) == ..."` | 改了纯函数（如 `_clean_candidate`、`_sanitize_novel_name`） |
+| ④ 数据链路追溯 | 按 `docs/verification_protocol.md` 第二章相关项执行 | 改了 prompt schema / context_manager / tracker |
 
 **完工判据**：
 - ① 必须输出 `ok` 才能继续
-- ② 必须不抛 UnicodeEncodeError 或 ImportError
+- ② 必须不抛 ImportError
 - 验证失败 → 回阶段 3 修复，**不要直接进入文档同步**
 
 **反例**：改完代码直接报告"完成"，不跑任何验证。
@@ -135,8 +134,8 @@
 | 新增 Agent 或 Phase | `README.md` 架构图 + 核心特性 | 同步更新 |
 | 新增 / 升级 Python 依赖 | `requirements.txt` + `README.md` 环境要求 | 双向同步 |
 | 新增用户输入点 | `docs/system_reference.md` 第十七章用户输入校验清单 | 追加一行（位置 / 校验 / 风险） |
-| 新增 CLI 输出点（ui.* 或 print） | `docs/system_reference.md` 第十九章 19.5 输出点全览 | 追加一行 |
-| 修改 CLI 渲染层（ui.py / name_generator.py）| `docs/system_reference.md` 第十九章 + `docs/parameters_and_changelog.md` 第八章硬编码常量 + `README.md` 变更日志 | 三处同步 |
+| 新增输出点（ui.* 函数） | `docs/system_reference.md` 第十九章 19.5 输出点全览 | 追加一行 |
+| 修改输出层（ui.py / name_generator.py）| `docs/system_reference.md` 第十九章 + `README.md` 变更日志 | 两处同步 |
 | 发现验证协议本身有盲区 | `docs/verification_protocol.md` | 补充或修正验证项 |
 | 以上均不适用 | — | 在阶段 6 回告时显式注明"文档已是最新，无需同步" |
 
@@ -196,7 +195,7 @@
 2. ❌ 跳过文档同步，承诺"下次一起更新"
 3. ❌ 用一个笼统的 TaskCreate 包住所有工作，进度无法追踪
 4. ❌ 在 bug 修复任务中"顺手"做风格清理 / 重构 / 抽象
-5. ❌ 在 Windows 上写代码不考虑 GBK 控制台编码兼容（必须走 `core/ui.py` 的 console）
+5. ❌ 在代码中使用 print() 直接输出，不通过 `core/ui.py`
 6. ❌ 新增依赖只改 requirements.txt 不改 README，或反之
 7. ❌ 新增追踪字段只改 tracker.py 不同步 `_FIELD_MEANINGS` / parameters_and_changelog.md CSV 映射
 8. ❌ 改 prompt schema 只改 prompt 不查 context_manager / 下游 Agent 是否消费
@@ -216,7 +215,7 @@
   ↓
 实现：先 Read 再 Edit；不夹带；TaskUpdate 推进
   ↓
-验证：① 语法导入 ② CLI 冒烟（必跑）；改了字段链路加 ⑤
+验证：① 语法导入 ② Web 启动冒烟（必跑）；改了字段链路加 ④
   ↓
 文档同步：parameters → self_check → flowchart → README → requirements
   逐行判断同步矩阵，不跳行

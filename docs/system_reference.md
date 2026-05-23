@@ -31,9 +31,9 @@
 
 ## 一、Director 输出字段链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
-Director 输出 JSON 包含 5 个顶级 key：`world`、`characters`、`locations`、`outline`、`style`。
+Director 输出 JSON 包含 4 个顶级 key：`world`、`characters`、`locations`、`outline`（`style` 字段已于 #160 移除）。
 
 ### 1.1 `world` 字段
 
@@ -93,9 +93,7 @@ Director 输出 JSON 包含 5 个顶级 key：`world`、`characters`、`location
 
 ### 1.5 `style` 字段
 
-| 子字段 | Pipeline 存储 | 说明 |
-|--------|-------------|------|
-| `style.target_words_per_chapter` | `state.outline["style"]` | 仅保存，不直接消费 |
+> **已移除（#160）**：Director prompt 不再输出 `style` 字段（功能由 StyleAdvisor 完全替代）。`_split_director_output` 会 `pop("style", None)` 清理残留。
 
 ---
 
@@ -218,7 +216,7 @@ relationships.json, validation_rules.json, locations.json
 
 ## 四、Context 构建链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 4.1 build_running_context 组装
 
@@ -248,7 +246,7 @@ FULL_CONTEXT_TEMPLATE:
 
 ## 五、Style Guide 分发链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 > **本节内容已迁移至 `docs/parameters_and_changelog.md` 第四章「风格指南」+「STYLE_FIELDS 分发过滤」表格**。
 > 那里是 STYLE_FIELDS 字段分发的权威来源，含每个 Agent 收到的字段列表。
@@ -262,7 +260,7 @@ FULL_CONTEXT_TEMPLATE:
 
 ## 六、Writer 特殊链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 6.1 叙事视角
 
@@ -307,7 +305,7 @@ writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=mi
 
 ## 七、程序化检查链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 7.1 写作循环中的检查（pipeline `_write_chapters`）
 
@@ -327,7 +325,7 @@ writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=mi
 
 ## 八、修订流程数据链路
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ```
 revise_chapter → critic.run → _select_idea → _execute_revise
@@ -347,7 +345,7 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 
 ## 九、变更自检操作步骤
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 步骤 1：Prompt 变更检查
 
@@ -473,7 +471,7 @@ revise_chapter → critic.run → _select_idea → _execute_revise
 
 ## 十、LLM 输出健壮性
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 AI 不一定严格按 schema 输出，每个 Agent 的 LLM 调用点都需要防御性处理。
 
@@ -532,7 +530,7 @@ parse_json 处理链：
 
 ## 十一、状态持久化完整性
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 11.1 NovelState save/load 往返
 
@@ -581,7 +579,7 @@ tmp_path.replace(state_path)  # 原子 rename
 
 ## 十二、Pipeline 状态机
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 12.1 阶段转换图
 
@@ -667,7 +665,7 @@ pending → drafted → reviewed → tracked
 
 ## 十三、Config 消费审计
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 > **本节内容已迁移至 `docs/parameters_and_changelog.md`**：
 > - config.yaml 字段消费清单 → `parameters_and_changelog.md` 第一章 + 第二章 + 第三章
@@ -679,7 +677,7 @@ pending → drafted → reviewed → tracked
 
 ## 十四、Reviewer 输出全量消费
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 Reviewer 返回一个完整 JSON，包含 7 个顶级字段。每个字段都必须被正确消费。
 
@@ -756,7 +754,7 @@ review["consistency_score"] = calc_score  # 覆盖 reviewer 原始分数
 
 ## 十五、边界场景
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 15.1 极端章节数
 
@@ -843,7 +841,7 @@ if groups.get("inactive") or groups.get("deceased"): ...
 
 ## 十六、常见故障模式速查
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 | 故障现象 | 可能原因 | 排查位置 |
 |---------|---------|---------|
@@ -872,20 +870,19 @@ if groups.get("inactive") or groups.get("deceased"): ...
 
 ## 十七、用户输入校验清单
 
-> *最后验证：2026-05-21（含 prompt_utils 跨平台输入封装重构）*
+> *最后验证：2026-05-23（含 #159-#166 自检修复）*
 
 ### 17.1 输入点全览与校验现状
 
-> 自 2026-05-21 起所有交互输入统一改用 `core/prompt_utils.py`（基于 prompt_toolkit），
-> 跨平台支持 Win/Mac/Linux，原生支持退格、方向键、Home/End、Alt+Backspace 删词、多行光标自由移动，
-> 不再依赖系统 readline（Windows 无该模块）。Ctrl+C 抛 `UserAbort` 而非 KeyboardInterrupt，便于上层精准捕获。
+> 自 2026-05-23 起所有交互输入统一通过 `core/prompt_utils.py`（WebSocket 双向通信），
+> 由前端组件收集用户输入并通过 WebSocket 回传。`UserAbort` 在前端取消或 WebSocket 断开时触发。
 
 | 输入点 | 位置 | 校验现状 | 风险 |
 |--------|------|---------|------|
-| 故事灵感 `idea` | main.py `cmd_new` | ✅ `prompt_multiline` 多行 + 非空检查 + UserAbort | 已修复（原跨行光标错乱、无法删除字符） |
-| 小说名称 `name` | main.py `cmd_new` → `_pick_novel_name` | ✅ AI 起名（`suggest_novel_names` 3 候选 / 再生成 / 自输）+ `_sanitize_novel_name` validator；输入顺序：火花 → 名字 → 风格 | 已修复（#48 / #57） |
-| 风格描述 `style` | main.py `cmd_new` | ✅ `prompt_single`，可留空 → None | 安全 |
-| Braindump 各节反馈 | main.py `_braindump_section` | ✅ `prompt_choice` 三选一 + adjust 时进入 `prompt_multiline` | 安全 |
+| 故事灵感 `idea` | web/app.py `_run_pipeline` (new) | ✅ 前端多行输入 + 非空检查 | 安全 |
+| 小说名称 `name` | web/app.py `_run_pipeline` (new) | ✅ 前端 AI 起名（`/api/suggest-names`）+ `sanitize_novel_name` REST 校验 | 安全 |
+| 风格描述 `style` | web/app.py `_run_pipeline` (new) | ✅ 前端单行输入，可留空 | 安全 |
+| Braindump 各节反馈 | core/braindump.py `_braindump_section` | ✅ `prompt_choice` 三选一 + adjust 时进入 `prompt_multiline` | 安全 |
 | 总章数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=1)` 范围校验 | 已修复（原可输 0） |
 | 每章最少字数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=500)` | 已修复（原无下限） |
 | 每章最多字数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=words_min)` | 已修复（max<min 无检查） |
@@ -897,15 +894,15 @@ if groups.get("inactive") or groups.get("deceased"): ...
 | 修订意见 | pipeline.py `_collect_user_feedback` | ✅ `prompt_multiline` Ctrl+D 提交 | 已修复（原 END 终止符不直观） |
 | 修订思路选择 | pipeline.py `_select_idea` | ✅ `prompt_single` + isdigit + 范围检查 + 默认回退 | 安全 |
 | 修订确认 y/n | pipeline.py `_execute_revise` | ✅ `prompt_yes_no(default=True)` | 安全 |
-| 继续创作小说名 | main.py `cmd_continue` | ✅ `prompt_choice` 列表选择，不再手输 | 已修复（原拼错就找不到） |
-| 修订小说名 / 章节编号 | main.py `cmd_revise` | ✅ 两个 `prompt_choice` 列表选择 | 已修复（同上） |
-| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ `prompt_choice` 二选一 default=continue（CLI）；Web 模式自动继续不弹确认（#124） | 安全 |
+| 继续创作小说名 | web/app.py `_run_pipeline` (continue) | ✅ 前端列表选择 | 安全 |
+| 修订小说名 / 章节编号 | web/app.py `_run_pipeline` (revise) | ✅ 前端列表选择 | 安全 |
+| checkpoint 继续/退出 | pipeline.py `_checkpoint` | ✅ `prompt_choice` 二选一 default=continue；Web 模式自动继续不弹确认（#124） | 安全 |
 
 ### 17.2 必须修复的校验缺口
 
 #### 小说名称路径安全 ✅ 已修复（#48）
 
-`name` 直接用于 `OUTPUT_DIR / name` 创建目录和文件。`main.py` 中 `_sanitize_novel_name` 已实现以下校验：
+`name` 直接用于 `OUTPUT_DIR / name` 创建目录和文件。`core/name_generator.py` 中 `sanitize_novel_name` 已实现以下校验：
 
 ```
 name = ""              → 非空检查
@@ -941,7 +938,7 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 
 ## 十八、硬编码内容审计
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23* —
 
 ### 18.1 Prompt 模板占位符一致性
 
@@ -995,72 +992,44 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 
 ---
 
-## 十九、CLI 渲染层（core/ui.py）
+## 十九、Web 输出层（core/ui.py + core/prompt_utils.py）
 
-> *最后验证：2026-05-21*
+| *最后验证：2026-05-23（#170 移除 CLI）* |
 
 ### 19.1 输入/输出职责分离
 
 | 维度 | 模块 | 说明 |
 |------|------|------|
-| 输出（展示） | `core/ui.py`（rich 13.x） | banner / section / Panel / Table / 颜色 / spinner |
-| 输入（收集） | `core/prompt_utils.py`（prompt_toolkit 3.x） | prompt_single / prompt_multiline / prompt_choice / prompt_yes_no / prompt_int |
+| 输出（展示） | `core/ui.py` | 通过 WebSocket output_queue 推送到前端，函数签名与 Rich 版一致 |
+| 输入（收集） | `core/prompt_utils.py` | 通过 WebSocket 向前端发送 input_request，阻塞等待匹配响应 |
 
-**原则**：所有 `print` 必须改用 `ui.*`；输入必须改用 `prompt_*`。这两个模块互不依赖，未来要换渲染库（如 textual）只动 ui.py，不影响输入。
+**原则**：所有输出必须使用 `ui.*`；所有输入必须使用 `prompt_*`。两个模块通过 `core/prompt_utils.get_current_session()` 共享会话上下文。
 
 ### 19.2 ui.py 导出函数清单
 
 | 类别 | 函数 | 用途 |
 |------|------|------|
-| 横幅 | `banner(title, subtitle)` | 命令入口大横幅（cmd_new / cmd_continue / start_new_novel / resume_novel） |
+| 横幅 | `banner(title, subtitle)` | 命令入口大横幅（start_new_novel / resume_novel） |
 | 阶段 | `section(title, body, style)` | 阶段小标题（Phase 0-5 + 章节头） |
 | 分割 | `divider(label, style)` | Braindump 节之间的轻量分割线 |
 | Braindump | `show_braindump_intro / show_braindump_result / show_braindump_summary` | 立项问答 4 节的展示 |
 | 起名 | `show_name_candidates(candidates)` | AI 推荐的 3 候选展示 |
 | 参数 | `show_param_suggestions / show_param_confirmed` | _collect_params 的建议表 + 确认表 |
-| 章节 | `ChapterProgress` 类（**当前未启用**，见 #59） | Live 进度条上下文管理器 |
+| 章节 | `ChapterProgress` 类 | 通过 WebSocket 推送进度事件（start/update/chapter_done） |
 | 完成 | `show_completion(novel_name, final_dir)` | Phase 5 完成提示 |
-| 列表 | `show_novel_list(rows)` | cmd_status 小说项目列表 |
-| 消息 | `info / warn / success / error / hint` | 滚动输出（ℹ / ⚠ / ✓ / ✗ / · 前缀） |
+| 列表 | `show_novel_list(rows)` | 小说项目列表 |
+| 消息 | `info / warn / success / error / hint` | 滚动输出 |
 
-### 19.3 Windows 平台兼容
-
-```python
-# core/ui.py 顶部（rich 导入之前）
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-```
-
-**原因**：Windows 控制台默认 GBK 编码，无法编码 ✓ / ⚠ / ℹ / Panel 边框等 Unicode 符号，会抛 `UnicodeEncodeError`。reconfigure 后 stdout/stderr 切到 UTF-8，errors="replace" 兜底无法编码字符。
-
-**检查点**：如果未来在 ui.py 之外又引入了新的 stdout 写入点，确认该写入点也走 console（即 `from core.ui import console; console.print(...)`），避免绕过 UTF-8 切换。
-
-### 19.4 ChapterProgress 设计权衡（未启用）
-
-原 plan 设计的 `ChapterProgress`（基于 `rich.progress.Progress` 的 Live 进度条）会与 `_handle_retire` 等使用 prompt_toolkit 输入的环节抢占终端控制权——rich 的 Live 渲染会持续重绘终端底部，而 prompt_toolkit 同样需要独占终端。两者冲突会导致进度条卡死或输入框错乱。
-
-**当前方案**：`_write_chapters` / `_edit_chapters` 改用 `ui.section()` 渲染章节头 + `ui.info/warn/success/hint` 滚动输出 stage 进展。视觉上不如 Live 进度条紧凑，但稳定可靠。
-
-**保留 `ChapterProgress` 类**：以便未来非交互场景（如批量 CI 生成，不存在 prompt_toolkit 输入）使用。
-
-### 19.5 main.py / pipeline.py 输出点全览
+### 19.3 pipeline.py 输出点全览
 
 | 文件 | 函数 | 主要 ui.* 调用 |
 |------|------|---------------|
-| main.py | `cmd_new` | banner + （prompt_*） + `_braindump` |
-| main.py | `_pick_novel_name` | console.status spinner + show_name_candidates + prompt_choice |
-| main.py | `_braindump` / `_braindump_section` | show_braindump_intro + divider + show_braindump_result + show_braindump_summary + info |
-| main.py | `cmd_continue` / `cmd_revise` | banner + prompt_choice + warn/error |
-| main.py | `cmd_status` | show_novel_list |
+| core/braindump.py | `braindump` / `_braindump_section` | show_braindump_intro + divider + show_braindump_result + show_braindump_summary + info |
 | pipeline.py | `start_new_novel` / `resume_novel` | banner + error/hint |
 | pipeline.py | `_run_pipeline` Phase 0-5 | info / success / warn / show_completion |
 | pipeline.py | `_collect_params` | show_param_suggestions + section + show_param_confirmed |
 | pipeline.py | `_write_chapters` / `_edit_chapters` | section（章节头）+ info / warn / success / hint（stage 进展） |
-| pipeline.py | `_checkpoint` | section（CLI）；Web 模式自动保存继续（#124） |
+| pipeline.py | `_checkpoint` | section；Web 模式自动保存继续（#124） |
 | pipeline.py | `_pre_write_check` | hint / warn（#127） |
 | pipeline.py | `_report_forgotten` | warn（#128） |
 | pipeline.py | `_handle_retire` | hint / info / success（#129） |
@@ -1068,7 +1037,7 @@ if sys.platform == "win32":
 | pipeline.py | `_handle_interrupt` / `_apply_strictness` | warn / success / hint / info |
 | agents/plotter.py | `Plotter.run` | info（#131） |
 
-**检查点**：新增 print 输出时必须改用 `ui.*` 等价函数；不要直接 `print(...)` 或 `console.print(...)`（绕过统一 prefix 风格）。
+**检查点**：新增输出时必须使用 `ui.*` 等价函数；不要直接 `print(...)`（绕过 WebSocket 通道）。
 
 ---
 
@@ -1143,25 +1112,23 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 
 ## 二十一、Web 架构
 
-> *最后验证：2026-05-22*
+> *最后验证：2026-05-23（#170 移除 CLI）*
 
-### 21.1 双入口共存
+### 21.1 Web-only 架构
 
 | 入口 | 命令 | 交互层 | 适用场景 |
 |------|------|--------|---------|
-| CLI | `py -3.10 main.py` | `core/prompt_utils` + `core/ui`（Rich） | 终端环境、服务器无头运行 |
-| Web | `py -3.10 web_main.py` | `web/bridge/web_prompt` + `web/bridge/web_ui`（WebSocket） | 桌面浏览器、可视化操作 |
+| Web | `python3 web_main.py` | `core/prompt_utils` + `core/ui`（WebSocket 原生） | 浏览器访问 http://localhost:8000 |
 
-CLI 和 Web 使用完全相同的 pipeline 逻辑（`core/pipeline.py`），区别仅在于交互层的实现。
+`core/prompt_utils.py` 和 `core/ui.py` 直接通过 WebSocket 与前端通信，无需桥接层。
 
-### 21.2 桥接层注入
+### 21.2 通信机制
 
-`web/bridge/__init__.py` 的 `install_web_bridge()` 在 `web/app.py` 中、`import core.pipeline` 之前执行，将 `core.prompt_utils` 和 `core.ui` 模块的函数替换为 WebSocket 版本。
+`core/prompt_utils.py` 通过 `threading.local()` 绑定当前线程的 `BridgeSession`：
 
-替换链路：
-- `prompt_choice` → `web_prompt.web_prompt_choice`：构造 `input_request` 消息 → 放入 `session.output_queue` → 阻塞等 `session.input_queue` 响应
-- `ui.info` → `web_ui.info`：构造 `output` 消息 → 放入 `session.output_queue` → 不阻塞
-- `LLMClient.Spinner` → 空操作：Web 环境下不输出终端 spinner
+- `prompt_choice` → 构造 `input_request` 消息 → 放入 `session.output_queue` → 阻塞等 `session.input_queue` 响应
+- `ui.info` → 构造 `output` 消息 → 放入 `session.output_queue` → 不阻塞
+- `LLMClient.Spinner` → 空操作（进度由 Web 层管理）
 
 ### 21.3 WebSocket 协议
 

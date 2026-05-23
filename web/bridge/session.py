@@ -29,7 +29,8 @@ class SessionManager:
         return session
 
     def get(self, session_id: str) -> BridgeSession | None:
-        return self._sessions.get(session_id)
+        with self._lock:
+            return self._sessions.get(session_id)
 
     def remove(self, session_id: str) -> None:
         with self._lock:

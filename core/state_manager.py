@@ -19,15 +19,15 @@ def atomic_write_json(path: Path, data) -> None:
 
 @dataclass
 class VolumeDef:
-    number: int
-    title: str
-    start_chapter: int  # 1-based, inclusive
-    end_chapter: int    # inclusive
+    number: int = 0
+    title: str = ""
+    start_chapter: int = 1
+    end_chapter: int = 1
 
 
 @dataclass
 class ChapterState:
-    chapter_number: int
+    chapter_number: int = 0
     title: str = ""
     plot_points: str = ""
     draft_path: str | None = None
@@ -44,8 +44,8 @@ class ChapterState:
 
 @dataclass
 class NovelState:
-    novel_name: str
-    story_idea: str
+    novel_name: str = ""
+    story_idea: str = ""
     created_at: str = ""
     updated_at: str = ""
     phase: str = "styling"  # styling | collecting_params | directing | refining | plotting | writing | editing | complete
