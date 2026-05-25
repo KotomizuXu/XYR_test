@@ -235,6 +235,10 @@ Orchestra/
 - **#176** `watch(hasSession)` 写在 `const hasSession` 声明前导致 ReferenceError 白屏，调整声明顺序
 - **#177** 精修调整后数据仅存在内存，Tab 不更新；`_refine_block` 新增 `on_update` 回调实时写盘
 
+### 2026-05-25 自检修复（#178）
+
+- **#178** `auto_fix` 返回值直接下标访问改为 `.get()` 防御式访问，避免结构不完整时 KeyError 崩溃
+
 ### 2026-05-23 阶段回滚功能（#174）
 
 - **#174** 新增 `POST /api/novels/{name}/rollback` API，支持回滚到 collecting_params / directing / plotting / writing 四个阶段，自动清理后续阶段产出的磁盘文件和 state 数据

@@ -1250,10 +1250,11 @@ class NovelPipeline:
                 # Programmatic checks: character name alias fix
                 fixed = False
                 fix_result = tracker.auto_fix(draft, ch_num)
-                if fix_result["fixes"]["applied"]:
+                applied = fix_result.get("fixes", {}).get("applied", [])
+                if applied:
                     draft = fix_result["text"]
                     fixed = True
-                    ui.hint(f"[追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
+                    ui.hint(f"[追踪] 自动修正角色名：{applied}")
 
                 # Programmatic checks: banned AI words auto-fix
                 fixed_draft, banned_changes = tracker.auto_fix_banned_words(draft, state.style_guide)
@@ -1664,10 +1665,11 @@ class NovelPipeline:
         # Programmatic fixes on revised text
         fixed = False
         fix_result = tracker.auto_fix(final_text, ch_num)
-        if fix_result["fixes"]["applied"]:
+        applied = fix_result.get("fixes", {}).get("applied", [])
+        if applied:
             final_text = fix_result["text"]
             fixed = True
-            ui.hint(f"[追踪] 自动修正角色名：{fix_result['fixes']['applied']}")
+            ui.hint(f"[追踪] 自动修正角色名：{applied}")
 
         fixed_draft, banned_changes = tracker.auto_fix_banned_words(final_text, state.style_guide)
         if banned_changes:

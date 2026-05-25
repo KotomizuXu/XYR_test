@@ -868,3 +868,4 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #175 | 严重 | `_confirm_refine` 内部两处 `except UserAbort: return "yes"` 吞掉异常，导致 `_refine_block` 的 `except UserAbort: self._interrupted = True` 为死代码（#173 修复无效） | `core/pipeline.py` `_confirm_refine` — 移除两处 `except UserAbort`，让异常传播到 `_refine_block` 正确设置 `_interrupted` |
 | #176 | Bug | `watch(hasSession)` 写在 `const hasSession` 之前，`const` 暂时性死区导致运行时 ReferenceError，页面白屏 | `frontend/src/views/NovelDetailView.vue` — 将 `watch(hasSession)` 移到 `hasSession` 定义之后 |
 | #177 | Bug | 精修过程中调整后的数据只存在于内存，REST API 轮询读不到最新数据，Tab 不更新 | `core/pipeline.py` — `_refine_block` 新增 `on_update` 回调参数，每次调整/重写后调用；`_run_directing_holistic` 传入 `on_update=lambda r: self._split_director_output(state, r)` 实时写盘 |
+| #178 | 防御 | `auto_fix` 返回值使用直接下标访问，若返回结构不完整将 KeyError 崩溃 | `core/pipeline.py` — 两处 `fix_result["fixes"]["applied"]` 改为 `.get("fixes", {}).get("applied", [])` 防御式访问（写章 + 精修各 1 处） |
