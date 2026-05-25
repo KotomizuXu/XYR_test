@@ -17,15 +17,30 @@ MAX_SUMMARY_SHORT = 50  # 更早的最多保留 N 条简略
 class PlotAgent(BaseAgent):
     PROMPT_TEMPLATE = "plotter_system.txt"
 
-    def run(self, outline: dict, world: dict, num_chapters: int, style_guide: dict | None = None, volumes: list | None = None) -> list[dict]:
+    def run(
+        self,
+        outline: dict,
+        world: dict,
+        num_chapters: int,
+        style_guide: dict | None = None,
+        volumes: list | None = None,
+        existing_plans: list[dict] | None = None,
+        on_batch_complete: callable = None,
+    ) -> list[dict]:
         system = self.apply_style(self.system_prompt, style_guide)
         world_str = json.dumps(world, ensure_ascii=False, indent=2)
         outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
 
         if num_chapters <= BATCH_SIZE and not volumes:
+            if existing_plans and len(existing_plans) >= num_chapters:
+                ui.hint(f"[编剧-恢复] 已有 {len(existing_plans)} 章计划，跳过生成")
+                return existing_plans
             return self._generate_batch(system, world_str, outline_str, 1, num_chapters, num_chapters)
 
-        all_plans: list[dict] = []
+        all_plans: list[dict] = list(existing_plans) if existing_plans else []
+        completed = len(all_plans)
+        if completed > 0:
+            ui.hint(f"[编剧-恢复] 已有 {completed} 章计划，从第 {completed + 1} 章继续")
 
         if volumes:
             for vol in volumes:
@@ -34,6 +49,14 @@ class PlotAgent(BaseAgent):
                 for batch_idx in range(vol_batches):
                     start = vol.start_chapter + batch_idx * BATCH_SIZE
                     end = min(start + BATCH_SIZE - 1, vol.end_chapter)
+
+                    if end <= completed:
+                        continue
+
+                    # 部分完成的批次：裁掉属于当前批次范围的旧数据后重新生成
+                    if start <= completed < end:
+                        all_plans = [p for p in all_plans if p.get("chapter_number", 0) < start]
+
                     ui.info(f"[编剧] 生成第 {start}-{end} 章计划（卷{vol.number}「{vol.title}」）...")
                     existing_summaries = self._build_existing_summaries(all_plans)
                     batch = self._generate_batch(
@@ -42,8 +65,11 @@ class PlotAgent(BaseAgent):
                         volume_context=f"本批次属于卷{vol.number}「{vol.title}」（第{vol.start_chapter}-{vol.end_chapter}章）。本批次第{end}章是本卷最后一章，请给出有分量的卷末收束。" if end == vol.end_chapter else f"本批次属于卷{vol.number}「{vol.title}」（第{vol.start_chapter}-{vol.end_chapter}章）。",
                     )
                     all_plans.extend(batch)
+                    if on_batch_complete:
+                        on_batch_complete(all_plans)
         else:
-            for start in range(1, num_chapters + 1, BATCH_SIZE):
+            start = completed + 1
+            while start <= num_chapters:
                 end = min(start + BATCH_SIZE - 1, num_chapters)
                 batch_num = (start - 1) // BATCH_SIZE + 1
                 total_batches = (num_chapters + BATCH_SIZE - 1) // BATCH_SIZE
@@ -54,6 +80,9 @@ class PlotAgent(BaseAgent):
                     existing_summaries=existing_summaries,
                 )
                 all_plans.extend(batch)
+                if on_batch_complete:
+                    on_batch_complete(all_plans)
+                start += BATCH_SIZE
 
         logger.info(f"Plotter: done. {len(all_plans)} chapters planned.")
         return all_plans

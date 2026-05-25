@@ -871,3 +871,9 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #178 | 防御 | `auto_fix` 返回值使用直接下标访问，若返回结构不完整将 KeyError 崩溃 | `core/pipeline.py` — 两处 `fix_result["fixes"]["applied"]` 改为 `.get("fixes", {}).get("applied", [])` 防御式访问（写章 + 精修各 1 处） |
 | #179 | Bug | 精修调整后后端已写盘（#177 修复），但前端 Tab 仅靠 5s 轮询刷新，导致右侧消息日志已显示新 JSON 而左侧导演 Tab 仍显示旧数据，最多延迟 5 秒 | `frontend/src/views/NovelDetailView.vue` — 新增 `watch(store.messages.length)` 监听 WebSocket `refine_block` 消息，收到后立即调用 `fetchDetail()` 刷新 Tab 数据 |
 | #180 | 体验 | 精修消息在右侧日志中用 `JsonViewer` 平铺渲染，与左侧导演 Tab 分 Tab 展示的世界观/大纲视觉结构不对应；`RefineBlockViewer.vue` 组件已创建但未接入；左侧导演 Tab `world_data` 内嵌套 `world` 对象导致内容藏在一层英文折叠项下不显眼；`JsonViewer.getTitle` 回退到数组索引显示为"0""1" | `frontend/src/components/display/MessageLog.vue` — `refine_block` 渲染改用 `RefineBlockViewer`（世界观/角色/地点/大纲/风格指南 5 子 Tab）；`frontend/src/components/display/RefineBlockViewer.vue` — 新增"风格指南"Tab（`style` key）和"其他"Tab 兜底，保证零丢失；新增 `bare` prop 支持无卡片嵌入；`frontend/src/views/NovelDetailView.vue` — 左侧导演 Tab 改为 `RefineBlockViewer :bare="true"`，`directingContent` computed 展平嵌套 `world` 对象；`frontend/src/components/display/JsonViewer.vue` — FIELD_LABELS 补全 86 个缺失字段 + `style` key；`getTitle` 扩展识别字段避免纯数字索引 |
+
+### 2026-05-25 编剧断点续写（#181）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #181 | 严重 | 编剧阶段（plotting）API 报错后恢复时从头开始重新生成全部章节计划，已成功生成的批次被丢弃；写作/编辑阶段有 try/except + stage 标记但编剧阶段完全缺失断点续写机制 | `agents/plotter.py` — `run()` 新增 `existing_plans`（传入已有批次）和 `on_batch_complete`（每批次完成后回调保存）参数，按 `chapter_number` 跳过已完成批次，部分完成批次裁剪后重新生成；`core/pipeline.py` — plotting 阶段包裹 try/except，异常时保存已有 `chapter_plans`，恢复时作为 `existing_plans` 传入实现断点续写 |

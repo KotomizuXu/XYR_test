@@ -37,11 +37,13 @@ flowchart TD
 
     P1 --> |holistic ✓<br/>world.json / outline.json| P2
 
-    subgraph P2["Phase 2: 编剧 PlotAgent"]
-        P2A[章节拆分] --> P2B
+    subgraph P2["Phase 2: 编剧 PlotAgent（断点续写）"]
+        P2A[每 BATCH_SIZE 章一批<br/>批次完成后回调保存 state] --> P2B
         P2B[剧情要点+情绪线] --> P2C
         P2C[伏笔+场景结构<br/>scene_structure<br/>tension_level]
     end
+
+    P2 -.-> |API 报错<br/>已有批次保存到 chapter_plans| P2
 
     P2 --> |chapters.json| P25
 

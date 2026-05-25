@@ -209,7 +209,27 @@ class NovelPipeline:
             if not self._checkpoint(state, f"拆分 {state.total_chapters} 章剧情计划（耗时较长）"):
                 return
             ui.info("[编剧] 正在拆分章节和规划剧情...")
-            chapter_plans = self.plotter.run(state.outline, state.world_data, state.total_chapters, style_guide=state.style_guide, volumes=state.volumes)
+
+            def _save_plotting_progress(plans):
+                state.chapter_plans = list(plans)
+                self.state_mgr.save(state)
+
+            try:
+                chapter_plans = self.plotter.run(
+                    state.outline, state.world_data, state.total_chapters,
+                    style_guide=state.style_guide, volumes=state.volumes,
+                    existing_plans=state.chapter_plans,
+                    on_batch_complete=_save_plotting_progress,
+                )
+            except Exception as e:
+                logger.error(f"Plotting phase error: {e}")
+                if state.chapter_plans:
+                    ui.hint(f"[编剧] 已保存 {len(state.chapter_plans)} 章计划，恢复后将从断点继续")
+                self.state_mgr.save(state)
+                ui.error(f"编剧阶段出错：{e}")
+                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
+                raise
+
             state.chapter_plans = chapter_plans
 
             novel_dir = self.state_mgr.get_novel_dir(state.novel_name)

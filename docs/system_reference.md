@@ -605,7 +605,7 @@ styling → collecting_params → directing → plotting → writing → editing
 | collecting_params | ✅ | 重新收集参数 |
 | directing | ✅ | 全量精修：`state.refined_blocks` 含 `"holistic"` 时跳过，否则重新生成或从已有数据进入精修 |
 | refining（旧） | ✅ | 向后兼容旧 state，走 `_refine_director_output()` |
-| plotting | ✅ | 重新生成章节计划 |
+| plotting | ✅ | 断点续写：`state.chapter_plans` 含部分结果时作为 `existing_plans` 传入 Plotter，跳过已完成批次（#181） |
 | writing（从中间章节） | ✅ | `current_chapter` 索引从 i 继续 |
 | editing（从中间章节） | ✅ | 同上 |
 
@@ -856,6 +856,7 @@ if groups.get("inactive") or groups.get("deceased"): ...
 | Director/Reviewer 返回 list 导致崩溃 | `chat_json` 返回 list，下游 `.get()` 报错 | 各 Agent 的类型检查 |
 | 新增 state 字段后旧项目无法加载 | NovelState 新字段无默认值 | state_manager.py load + dataclass 默认值 |
 | 100 章小说 Plotter summaries 溢出 | `existing_summaries` 累积过长 | plotter.py `_generate_batch` |
+| 编剧阶段 API 报错后从头开始 | plotting 无 try/except，异常后 `chapter_plans` 未保存 | pipeline.py plotting 阶段 + plotter.py `existing_plans` 参数（#181） |
 | 章节正文为空导致下游异常 | Writer 返回空字符串 | writer.py → pipeline.py 长度检查 |
 | 续写后文风偏离 | 续写时 context 不含完整 running_context | llm_client.py `_continue_text` |
 | JSON 反复截断最终 parse 失败 | `_continue_json` 3 次重试后返回截断原文 | llm_client.py `_continue_json` |
