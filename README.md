@@ -239,6 +239,11 @@ Orchestra/
 
 - **#178** `auto_fix` 返回值直接下标访问改为 `.get()` 防御式访问，避免结构不完整时 KeyError 崩溃
 
+### 2026-05-25 精修 Tab 实时同步修复（#179）
+
+- **#179** Director 精修调整后左侧导演 Tab 数据延迟最多 5 秒才更新（仅靠轮询），新增 `watch(store.messages.length)` 监听 `refine_block` WebSocket 消息，收到后立即刷新 REST API，消除消息日志与 Tab 之间的数据不一致窗口
+- **#180** 精修消息在右侧日志中平铺 JSON 展示，与左侧导演 Tab 分 Tab 结构不对应；接入 `RefineBlockViewer` 按"世界观/角色/地点/大纲/风格指南"5 子 Tab 展示，新增"其他"Tab 兜底；左侧导演 Tab 同步改为 `RefineBlockViewer :bare` 分 Tab，展平 LLM 嵌套 `world` 对象；`JsonViewer` FIELD_LABELS 补全 86 个缺失中文标签；`getTitle` 扩展识别字段避免数组项显示纯数字索引
+
 ### 2026-05-23 阶段回滚功能（#174）
 
 - **#174** 新增 `POST /api/novels/{name}/rollback` API，支持回滚到 collecting_params / directing / plotting / writing 四个阶段，自动清理后续阶段产出的磁盘文件和 state 数据

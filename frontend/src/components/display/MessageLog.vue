@@ -2,6 +2,7 @@
 import { nextTick, ref, watch } from 'vue'
 import type { OutputMessage } from '../../store'
 import JsonViewer from './JsonViewer.vue'
+import RefineBlockViewer from './RefineBlockViewer.vue'
 
 const props = defineProps<{ messages: OutputMessage[] }>()
 const logRef = ref<HTMLElement | null>(null)
@@ -128,7 +129,7 @@ const kindBorder: Record<string, string> = {
           <span class="refine-label">{{ msg.data.label }}</span>
           <n-tag v-if="msg.data.modified" size="tiny" type="warning">修改后</n-tag>
         </div>
-        <JsonViewer :data="msg.data.content" />
+        <RefineBlockViewer :content="msg.data.content" :label="msg.data.label" />
       </div>
     </div>
   </div>

@@ -7,6 +7,7 @@ import InputDispatcher from '../components/interaction/InputDispatcher.vue'
 import ParamTable from '../components/display/ParamTable.vue'
 import ProgressBar from '../components/display/ProgressBar.vue'
 import JsonViewer from '../components/display/JsonViewer.vue'
+import RefineBlockViewer from '../components/display/RefineBlockViewer.vue'
 
 const store = useNovelStore()
 const route = useRoute()
@@ -274,6 +275,34 @@ watch(() => store.sessionEnded, (ended) => {
     fetchDetail()
   }
 })
+
+// Refresh Tab data immediately when a refine_block message arrives via WebSocket,
+// instead of waiting for the 5-second polling interval.
+watch(() => store.messages.length, () => {
+  const last = store.messages[store.messages.length - 1]
+  if (last?.type === 'output' && last.data?.kind === 'refine_block') {
+    fetchDetail()
+  }
+})
+
+// Combine world_data + outline for RefineBlockViewer sub-tabs in the directing Tab
+const directingContent = computed(() => {
+  const wd = detail.value?.world_data
+  const outline = detail.value?.outline
+  if (!wd && !outline) return null
+  const result: any = {}
+  if (wd) {
+    const { characters, locations, world, style, ...rest } = wd
+    // LLM 可能在 world_data 内嵌套 world 对象，展平到顶层
+    const flat = world && typeof world === 'object' ? { ...world, ...rest } : { ...rest }
+    result.world_data = flat
+    if (characters) result.characters = characters
+    if (locations) result.locations = locations
+    if (style) result.style = style
+  }
+  if (outline) result.outline = outline
+  return result
+})
 </script>
 
 <template>
@@ -352,14 +381,7 @@ watch(() => store.sessionEnded, (ended) => {
                 回滚将清除此后所有阶段的数据（剧情拆章、正文等），确定继续？
               </n-popconfirm>
             </template>
-            <template v-if="detail.world_data">
-              <n-text depth="3" class="jv-section-title">世界观</n-text>
-              <JsonViewer :data="detail.world_data" type="world" />
-            </template>
-            <template v-if="detail.outline" style="margin-top: 16px">
-              <n-text depth="3" class="jv-section-title">大纲</n-text>
-              <JsonViewer :data="detail.outline" type="outline" />
-            </template>
+            <RefineBlockViewer v-if="directingContent" :content="directingContent" :bare="true" />
           </n-card>
           <n-text v-else-if="phaseState('directing') === 'current' && hasSession" depth="3" class="tab-placeholder">进行中...</n-text>
           <n-text v-else depth="3" class="tab-placeholder">此阶段尚未开始</n-text>

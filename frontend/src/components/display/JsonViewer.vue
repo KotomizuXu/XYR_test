@@ -26,6 +26,9 @@ const FIELD_LABELS: Record<string, string> = {
   clothing_food: '衣食', etiquette: '礼仪', festivals: '节庆', currency: '货币',
   magic_system: '魔法/力量体系', technology_level: '科技水平',
   key_figures: '关键人物', period: '时代',
+  travel_routes: '旅行路线', from: '出发地', to: '目的地', distance: '距离/耗时',
+  impact: '影响', planned_cast: '角色规划', brief: '简介',
+  planned_locations: '地点规划',
 
   // 角色字段
   characters: '角色', personality: '性格特点', motivation: '核心动机',
@@ -41,12 +44,34 @@ const FIELD_LABELS: Record<string, string> = {
   physical_traits: '外貌特征', distinguishing_marks: '显著特征',
   consistency: '一致性', physicalTraits: '外貌一致性', personalityTraits: '性格一致性',
   speechPatterns: '语言风格一致性',
+  age: '年龄', height_build: '身高体型', features: '相貌特点',
+  clothing_style: '穿着风格', distinctive_marks: '特殊标记',
+  special: '特殊能力', skills: '技能特长', weaknesses: '弱点',
+  childhood: '童年经历', growth: '成长历程', key_events: '重要事件',
+  turning_point: '人生转折', early: '初期状态', mid: '中期发展',
+  late: '后期蜕变', final: '最终形态',
+  catchphrases: '口头禅', address_style: '称呼方式',
+  elders: '对长辈称呼', peers: '对平辈称呼', self: '自称',
+  emotional_expressions: '情绪表达', happy: '高兴时', angry: '愤怒时',
+  sad: '悲伤时', nervous: '紧张时',
+  secrets: '秘密/反差', speech_patterns: '言语习惯',
+
+  // 地点卡
+  position: '相对位置', first_appearance: '首次出现',
+  five_senses: '五感细节', visual: '视觉元素', auditory: '听觉元素',
+  olfactory: '嗅觉元素', tactile: '触觉元素',
+  function: '剧情功能', related_characters: '相关人物',
+  significance: '故事意义', inhabitants: '常驻人群', access: '进出方式',
+  atmosphere: '氛围', sensory_details: '感官细节', taste: '味觉元素',
 
   // 大纲
   theme: '主题', ending: '结局方向', three_act: '三幕结构',
   key_turning_points: '关键转折点', act_1: '第一幕', act_2: '第二幕', act_3: '第三幕',
+  '第一幕-开端': '第一幕-开端', '第二幕-发展': '第二幕-发展', '第三幕-高潮与结局': '第三幕-高潮与结局',
   premise: '前提', central_conflict: '核心冲突', climax: '高潮',
   volumes: '分卷结构', narrative_focus: '叙事焦点',
+  tone_guidance: '文风指导', reference_works: '参考作品',
+  target_words_per_chapter: '每章目标字数', style: '风格指南',
 
   // 章节计划
   chapter_number: '章节号', emotional_arc: '情绪线',
@@ -75,6 +100,18 @@ const FIELD_LABELS: Record<string, string> = {
   suggestions: '建议', agent_temperatures: 'Agent温度',
   genre_knowledge: '类型知识库',
   quality_gates: '质量红线',
+  conflict_style: '冲突风格', progression: '剧情推进方式',
+  reward_density: '奖励密度', turning_points: '转折点风格',
+  unique_focus: '独特性侧重', dealbreakers: '绝对不能出现',
+  flexible_aspects: '可宽容方面', preserve: '必须保留特征',
+  total_chapters: '建议总章数', recommended: '推荐值', reason: '理由',
+  words_per_chapter: '每章字数建议', min: '最小值', max: '最大值',
+  pace_description: '节奏建议', tracking_thresholds: '追踪阈值',
+  plotline: '支线停滞阈值', required_elements: '必需元素',
+  pacing_rules: '节奏规则', primary_style: '主文风',
+  narration_rules: '叙述风格规则',
+  director: '导演', plotter: '编剧', writer: '作家',
+  reviewer: '审核', editor: '编辑', style_advisor: '风格顾问', critic: '修订顾问',
 
   // 关系/追踪
   allies: '盟友', enemies: '敌人', romantic: '恋爱', family: '家人',
@@ -120,7 +157,17 @@ function classifyEntries(obj: any) {
 
 function getTitle(item: any): string {
   if (!item || typeof item !== 'object') return ''
-  return item.name || item.title || item.event || item.type || ''
+  // 优先使用标识性字段
+  const id = item.name || item.title || item.event || item.type
+    || item.description || item.label || item.turning_point
+  if (id && typeof id === 'string') return id.length > 40 ? id.slice(0, 40) + '…' : id
+  // 回退：取第一个字符串值
+  for (const v of Object.values(item)) {
+    if (typeof v === 'string' && v.length > 0) {
+      return v.length > 40 ? v.slice(0, 40) + '…' : v
+    }
+  }
+  return ''
 }
 </script>
 
