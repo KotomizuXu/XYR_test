@@ -223,6 +223,10 @@ class NovelPipeline:
                 )
             except Exception as e:
                 logger.error(f"Plotting phase error: {e}")
+                # 确保已有进度不丢失（首批失败时 chapter_plans 可能为 None，
+                # 设置为空列表以便恢复时 existing_plans=list([]) 能正确跳过已完成批次）
+                if state.chapter_plans is None:
+                    state.chapter_plans = []
                 if state.chapter_plans:
                     ui.hint(f"[编剧] 已保存 {len(state.chapter_plans)} 章计划，恢复后将从断点继续")
                 self.state_mgr.save(state)

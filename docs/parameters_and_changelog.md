@@ -877,3 +877,9 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|----------|
 | #181 | 严重 | 编剧阶段（plotting）API 报错后恢复时从头开始重新生成全部章节计划，已成功生成的批次被丢弃；写作/编辑阶段有 try/except + stage 标记但编剧阶段完全缺失断点续写机制 | `agents/plotter.py` — `run()` 新增 `existing_plans`（传入已有批次）和 `on_batch_complete`（每批次完成后回调保存）参数，按 `chapter_number` 跳过已完成批次，部分完成批次裁剪后重新生成；`core/pipeline.py` — plotting 阶段包裹 try/except，异常时保存已有 `chapter_plans`，恢复时作为 `existing_plans` 传入实现断点续写 |
+
+### 2026-05-26 编剧 400 错误重试与断点续写补强（#182）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #182 | 严重 | 编剧阶段 API 返回 400 时三层缺陷叠加导致死循环：(1) `llm_client.py` 仅重试 500+ 错误，400 直接抛出；(2) `plotter.py` 批次级别无重试，首次批次 400 后 `on_batch_complete` 未被调用，`chapter_plans` 为 None；(3) 恢复时 `existing_plans=None` 等同新任务，从第 1 章重新开始并再次触发相同 400 | `core/llm_client.py` — `chat()`/`chat_json()` 对所有 `APIStatusError`（含 400）统一重试 `max_retries` 次；`agents/plotter.py` — `_generate_batch()` 新增批次级 3 次重试 + 400 时逐步裁剪上下文降级（先裁已规划摘要，再精简世界观），提取 `_build_batch_prompt`/`_trim_batch_prompt` 静态方法；`core/pipeline.py` — plotting except 块确保 `chapter_plans` 为空列表而非 None |

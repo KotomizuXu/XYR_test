@@ -130,9 +130,9 @@ class LLMClient:
                 else:
                     raise
             except anthropic.APIStatusError as e:
-                if e.status_code >= 500 and attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     wait = 2 ** (attempt + 1)
-                    logger.warning(f"Server error {e.status_code}, retrying in {wait}s")
+                    logger.warning(f"API error {e.status_code} (attempt {attempt+1}), retrying in {wait}s")
                     time.sleep(wait)
                 else:
                     raise
@@ -173,9 +173,9 @@ class LLMClient:
                 else:
                     raise
             except anthropic.APIStatusError as e:
-                if e.status_code >= 500 and attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     wait = 2 ** (attempt + 1)
-                    logger.warning(f"Server error {e.status_code}, retrying in {wait}s")
+                    logger.warning(f"API error {e.status_code} (attempt {attempt+1}), retrying in {wait}s")
                     time.sleep(wait)
                 else:
                     raise

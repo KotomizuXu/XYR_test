@@ -486,6 +486,14 @@ Web 前端体验全面优化：
 - `_continue_json` 截断回退静默返回不完整数据（#168）
 - `_split_director_output` 白名单过窄导致 LLM 生成的键被丢弃，改用排除法（#169）
 
+### 2026-05-26 编剧 400 错误重试与断点续写补强
+
+修复编剧阶段 API 返回 400 时死循环（从头重新拆分）的三层叠加缺陷：
+
+- `llm_client.py` `chat()`/`chat_json()` 对所有 `APIStatusError`（含 400）统一重试（#182）
+- `plotter.py` `_generate_batch()` 新增批次级 3 次重试 + 400 时上下文裁剪降级（#182）
+- `pipeline.py` plotting except 块确保 `chapter_plans` 为空列表而非 None，避免恢复时等同新任务（#182）
+
 ## 致谢
 
 本项目通过 `skills-lock.json` 锁定了两个外部 skill 作为方法论来源：

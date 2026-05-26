@@ -2,6 +2,9 @@
 
 import json
 import logging
+import time
+
+import anthropic
 
 from core import ui
 
@@ -11,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 5
 MAX_SUMMARY_FULL = 30   # 最近 N 条完整摘要
-MAX_SUMMARY_SHORT = 50  # 更早的最多保留 N 条简略
+MAX_SUMMARY_SHORT = 50  # 更早的最多保留 N 条
+BATCH_MAX_RETRIES = 3   # 单批次最大重试次数
 
 
 class PlotAgent(BaseAgent):
@@ -93,6 +97,51 @@ class PlotAgent(BaseAgent):
         existing_summaries: str = "",
         volume_context: str = "",
     ) -> list[dict]:
+        user_msg = self._build_batch_prompt(world_str, outline_str, start, end, total, existing_summaries, volume_context)
+        logger.info(f"Plotter: generating chapters {start}-{end} of {total}...")
+
+        for attempt in range(BATCH_MAX_RETRIES):
+            try:
+                result = self.llm.chat_json(
+                    system, user_msg, temperature=self._temperature()
+                )
+                if isinstance(result, dict):
+                    result = result.get("chapters", [])
+                if not isinstance(result, list):
+                    raise ValueError(f"Plotter returned unexpected format: {type(result)}")
+                for i, plan in enumerate(result):
+                    plan.setdefault("chapter_number", start + i)
+                return result
+            except anthropic.APIStatusError as e:
+                if attempt < BATCH_MAX_RETRIES - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(
+                        f"Plotter batch {start}-{end} API error {e.status_code} "
+                        f"(attempt {attempt+1}/{BATCH_MAX_RETRIES}), retrying in {wait}s"
+                    )
+                    if e.status_code == 400:
+                        user_msg = self._trim_batch_prompt(user_msg, attempt)
+                    time.sleep(wait)
+                else:
+                    raise
+            except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
+                if attempt < BATCH_MAX_RETRIES - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(
+                        f"Plotter batch {start}-{end} connection error "
+                        f"(attempt {attempt+1}/{BATCH_MAX_RETRIES}), retrying in {wait}s: {e}"
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
+    @staticmethod
+    def _build_batch_prompt(
+        world_str: str, outline_str: str,
+        start: int, end: int, total: int,
+        existing_summaries: str = "",
+        volume_context: str = "",
+    ) -> str:
         user_msg = (
             f"## 世界观设定\n{world_str}\n\n"
             f"## 故事大纲\n{outline_str}\n"
@@ -102,17 +151,29 @@ class PlotAgent(BaseAgent):
         )
         if volume_context:
             user_msg += f"\n\n{volume_context}"
-        logger.info(f"Plotter: generating chapters {start}-{end} of {total}...")
-        result = self.llm.chat_json(
-            system, user_msg, temperature=self._temperature()
-        )
-        if isinstance(result, dict):
-            result = result.get("chapters", [])
-        if not isinstance(result, list):
-            raise ValueError(f"Plotter returned unexpected format: {type(result)}")
-        for i, plan in enumerate(result):
-            plan.setdefault("chapter_number", start + i)
-        return result
+        return user_msg
+
+    @staticmethod
+    def _trim_batch_prompt(user_msg: str, attempt: int) -> str:
+        """400 重试时逐步裁剪上下文：先裁已规划摘要，再裁世界观。"""
+        if attempt == 0:
+            # 第一轮重试：移除已规划章节摘要
+            marker = "\n\n## 已规划的章节摘要"
+            idx = user_msg.find(marker)
+            if idx != -1:
+                logger.info("Plotter: trimming existing summaries for 400 retry")
+                return user_msg[:idx] + user_msg[user_msg.find("\n\n## 要求"):]
+        if attempt >= 1:
+            # 第二轮重试：精简世界观到前 500 字
+            marker = "## 世界观设定\n"
+            idx = user_msg.find(marker)
+            if idx != -1:
+                after_marker = idx + len(marker)
+                end_idx = user_msg.find("\n\n", after_marker)
+                if end_idx != -1 and end_idx - after_marker > 500:
+                    logger.info("Plotter: truncating world_data for 400 retry")
+                    return user_msg[:after_marker] + user_msg[after_marker:after_marker + 500] + "\n...(已精简)" + user_msg[end_idx:]
+        return user_msg
 
     @staticmethod
     def _build_existing_summaries(all_plans: list[dict]) -> str:
