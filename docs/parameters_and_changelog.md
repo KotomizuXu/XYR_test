@@ -542,6 +542,14 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #17 | 严重 | `_execute_revise` 不执行 `auto_fix` 和 `auto_fix_banned_words`，修订章节缺少程序化修复 | pipeline.py `_execute_revise` |
 | #18 | 严重 | 伏笔退休用 ID 但遗忘检测用 content 匹配，导致退休操作无效 | tracker.py `check_forgotten` |
 | #19 | 中等 | `_execute_revise` 不更新 `ch.review_status` 和 `ch.review_notes` | pipeline.py `_execute_revise` |
+
+### 2026-05-26 错误展示修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #20 | 严重 | 同一异常被 phase handler、top-level handler、web handler 三层重复展示，用户看到 3xERROR + 3xHINT | pipeline.py 阶段/top-level handler + web/app.py |
+| #21 | 中等 | phase/top-level handler 将原始 JSON 片段拼入 `ui.error` 暴露给用户 | pipeline.py 三处 phase handler |
+| #22 | 轻微 | pipeline.py 4 处引用已废弃的 `python main.py continue` CLI 命令（项目已迁移至 Web） | pipeline.py `_handle_interrupt` + 三处 phase handler |
 | #20 | 中等 | `_execute_revise` 不执行质量检查（陈词滥调、句式、抽象名词） | pipeline.py `_execute_revise` |
 | #21 | 中等 | `update_tracking` 缺少同场角色双向 dynamicRelations 记录 | tracker.py `update_tracking` |
 | #22 | 中等 | 主角 skills/knowledge 列表无去重，多章累积导致数据膨胀 | tracker.py `update_tracking` |
@@ -883,3 +891,9 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|----------|
 | #182 | 严重 | 编剧阶段 API 返回 400 时三层缺陷叠加导致死循环：(1) `llm_client.py` 仅重试 500+ 错误，400 直接抛出；(2) `plotter.py` 批次级别无重试，首次批次 400 后 `on_batch_complete` 未被调用，`chapter_plans` 为 None；(3) 恢复时 `existing_plans=None` 等同新任务，从第 1 章重新开始并再次触发相同 400 | `core/llm_client.py` — `chat()`/`chat_json()` 对所有 `APIStatusError`（含 400）统一重试 `max_retries` 次；`agents/plotter.py` — `_generate_batch()` 新增批次级 3 次重试 + 400 时逐步裁剪上下文降级（先裁已规划摘要，再精简世界观），提取 `_build_batch_prompt`/`_trim_batch_prompt` 静态方法；`core/pipeline.py` — plotting except 块确保 `chapter_plans` 为空列表而非 None |
+
+### 2026-05-26 审核循环重写机制优化（#183）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #183 | 中等 | 审核循环存在"反复打回但不修改内容"风险，5 层叠加：(1) feedback 丢弃 reviewer 的 location 字段，writer 不知道问题在哪；(2) `writer.rewrite()` 接收 chapter_plan/running_context 参数但不写入 user_msg，重写时无剧情目标和上下文；(3) 无重写变化检测，重写输出与原文高度相似时系统无感知；(4) 全章重写策略导致局部问题引发全局震荡；(5) 无升级策略，重写无效时不会换方式 | `core/pipeline.py` — feedback 构建保留 location 字段；审核循环新增 `difflib.SequenceMatcher` 相似度检测（>92% 标记为"几乎未修改"）；质量分趋势追踪（`quality_history`，连续两轮未上升则提前终止）；升级策略（上次未修改时追加高压提示）。`agents/writer.py` — `rewrite()` user_msg 新增 chapter_plan（剧情计划）和 running_context（精简至 30K 字符的写作上下文） |

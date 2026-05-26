@@ -221,6 +221,12 @@ Orchestra/
 
 ## 变更日志
 
+### 2026-05-26 错误展示修复
+
+- 引入 `_PhaseHandledError` 标记异常，phase handler 展示友好消息后标记 raise，top-level 和 web 层识别标记后跳过重复展示
+- phase handler 不再将原始 JSON 片段暴露给用户
+- 修复 4 处引用已废弃 `python main.py continue` 的过时命令
+
 ### 2026-05-23 剧情拆章大纲 + 章节正文展示（#171）
 
 - **#171** 剧情拆章 Tab 展示 PlotAgent 完整章节计划（摘要/张力/情绪曲线/场景结构/情节点/出场角色/伏笔/悬念等）
@@ -493,6 +499,16 @@ Web 前端体验全面优化：
 - `llm_client.py` `chat()`/`chat_json()` 对所有 `APIStatusError`（含 400）统一重试（#182）
 - `plotter.py` `_generate_batch()` 新增批次级 3 次重试 + 400 时上下文裁剪降级（#182）
 - `pipeline.py` plotting except 块确保 `chapter_plans` 为空列表而非 None，避免恢复时等同新任务（#182）
+
+### 2026-05-26 审核循环重写机制优化
+
+修复正文审核循环"反复打回但不修改内容"的五层叠加问题：
+
+- `pipeline.py` feedback 构建保留 reviewer 的 `location` 字段，让 writer 知道问题位置（#183）
+- `pipeline.py` 审核循环新增 `difflib.SequenceMatcher` 相似度检测，>92% 标记为"几乎未修改"（#183）
+- `pipeline.py` 新增质量分趋势追踪（`quality_history`），连续两轮未上升则提前终止无效重写（#183）
+- `pipeline.py` 新增升级策略：上次重写几乎未修改时追加高压提示要求大幅重组（#183）
+- `writer.py` `rewrite()` user_msg 新增 chapter_plan + 精简 running_context，让 writer 重写时有剧情目标和上下文（#183）
 
 ## 致谢
 

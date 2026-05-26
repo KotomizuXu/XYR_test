@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web.bridge.session import BridgeSession, session_manager
 from core.prompt_utils import set_current_session, UserAbort as WebUserAbort
+from core.pipeline import _PhaseHandledError
 from web.routers import novels
 
 app = FastAPI(title="Novel Agent Web")
@@ -179,6 +180,16 @@ def _run_pipeline(session: BridgeSession, mode: str, params: dict):
             "type": "session_ended",
             "session_id": session.session_id,
             "reason": "cancelled",
+        })
+
+    except _PhaseHandledError as e:
+        # Phase handler 已展示过错误，只需发送 session_ended
+        error_msg = _format_user_error(e.original)
+        session.output_queue.put({
+            "type": "session_ended",
+            "session_id": session.session_id,
+            "reason": "error",
+            "error": error_msg,
         })
 
     except Exception as e:

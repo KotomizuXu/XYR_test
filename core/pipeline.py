@@ -3,6 +3,7 @@
 import json
 import logging
 import signal
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,14 @@ from core.tracker import Tracker
 from core import ui
 
 logger = logging.getLogger(__name__)
+
+
+class _PhaseHandledError(Exception):
+    """Phase handler 已向用户展示错误并保存进度，上层无需重复展示。"""
+    def __init__(self, phase: str, original: Exception):
+        self.phase = phase
+        self.original = original
+        super().__init__(str(original))
 
 
 def load_config(config_path: str = None) -> dict:
@@ -94,7 +103,7 @@ class NovelPipeline:
         if self._current_state:
             self.state_mgr.save(self._current_state)
             ui.success(f"进度已保存（阶段: {self._current_state.phase}）")
-            ui.hint("使用 'python main.py continue' 恢复创作")
+            ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
 
     def _checkpoint(self, state: NovelState, next_action: str) -> bool:
         """在重操作前保存状态并询问用户是否继续。返回 True 表示继续，False 表示暂停。"""
@@ -137,10 +146,10 @@ class NovelPipeline:
 
         try:
             self._run_pipeline(state)
+        except _PhaseHandledError:
+            raise
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
-            ui.error(f"发生错误：{e}")
-            ui.hint("进度已保存，可使用 'continue' 继续")
             raise
 
     def resume_novel(self, novel_name: str) -> None:
@@ -160,10 +169,10 @@ class NovelPipeline:
 
         try:
             self._run_pipeline(state)
+        except _PhaseHandledError:
+            raise
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
-            ui.error(f"发生错误：{e}")
-            ui.hint("进度已保存，可使用 'continue' 继续")
             raise
 
     # 题材 → 审核严格度映射
@@ -227,12 +236,10 @@ class NovelPipeline:
                 # 设置为空列表以便恢复时 existing_plans=list([]) 能正确跳过已完成批次）
                 if state.chapter_plans is None:
                     state.chapter_plans = []
-                if state.chapter_plans:
-                    ui.hint(f"[编剧] 已保存 {len(state.chapter_plans)} 章计划，恢复后将从断点继续")
                 self.state_mgr.save(state)
-                ui.error(f"编剧阶段出错：{e}")
-                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
-                raise
+                ui.error("编剧阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("plotting", e) from e
 
             state.chapter_plans = chapter_plans
 
@@ -279,9 +286,9 @@ class NovelPipeline:
                 logger.error(f"Writing phase error: {e}")
                 state.phase = "writing"
                 self.state_mgr.save(state)
-                ui.error(f"写作阶段出错：{e}")
-                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
-                raise
+                ui.error("写作阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("writing", e) from e
 
         if self._interrupted:
             return
@@ -296,9 +303,9 @@ class NovelPipeline:
                 logger.error(f"Editing phase error: {e}")
                 state.phase = "editing"
                 self.state_mgr.save(state)
-                ui.error(f"编辑阶段出错：{e}")
-                ui.hint("进度已保存，可使用 'python main.py continue' 恢复")
-                raise
+                ui.error("编辑阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("editing", e) from e
 
         # Phase 5: Combine final output
         if state.phase == "editing" and state.current_chapter >= state.total_chapters:
@@ -1211,6 +1218,11 @@ class NovelPipeline:
                 loc = protag.get("currentStatus", {}).get("location", "")
                 ui.hint(f"[写前检查] 主角{protag['name']}：阶段={phase}，位置={loc or '未知'}")
 
+    @staticmethod
+    def _rewrite_similarity(old: str, new: str) -> float:
+        """计算两段文本的相似度 (0-1)。"""
+        return SequenceMatcher(None, old, new).ratio()
+
     def _write_chapters(self, state: NovelState) -> None:
         # I2: review-rewrite 循环硬上限。即便审稿一直 reject，也最多重写 max_retries 次后接受当前版本
         max_retries = self.config["novel"]["review_max_retries"]
@@ -1318,6 +1330,8 @@ class NovelPipeline:
                 atomic_write_json(review_path, review)
 
             retries = 0
+            quality_history: list[int] = []
+            stale_rewrite = False
             while not review.get("approved", False) and retries < max_retries:
                 retries += 1
                 issues = review.get("issues", [])
@@ -1328,7 +1342,9 @@ class NovelPipeline:
                 ui.warn(f"[审核] 发现 {len(major)} 个主要问题，第{retries}次重写...")
 
                 feedback = "\n".join(
-                    f"- [{i.get('severity')}] {i.get('description')} → 建议：{i.get('suggestion')}"
+                    f"- [{i.get('severity')}] {i.get('description')}"
+                    + (f"（位置：{i.get('location')}）" if i.get('location') else "")
+                    + f" → 建议：{i.get('suggestion')}"
                     for i in issues
                 )
                 strengths = review.get("strengths", [])
@@ -1336,7 +1352,31 @@ class NovelPipeline:
                     feedback += "\n\n以下部分写得很好，重写时请保留：\n" + "\n".join(
                         f"- {s}" for s in strengths
                     )
+
+                # 升级策略：上次重写几乎未修改 或 质量分停滞时加压
+                if stale_rewrite:
+                    feedback += (
+                        "\n\n[系统检测] 上次重写几乎未修改内容，本次必须进行实质性改写。"
+                        "不允许仅做同义替换或微调措辞，必须大幅重组段落结构和叙事方式。"
+                    )
+
+                # 质量分趋势检测：连续两轮未上升则提前终止
+                current_total = (review.get("quality_breakdown") or {}).get("total")
+                if current_total is not None:
+                    quality_history.append(current_total)
+                if len(quality_history) >= 2 and quality_history[-1] <= quality_history[-2]:
+                    ui.warn(f"[审核] 质量分停滞（{quality_history[-2]}→{quality_history[-1]}），重写可能无效，接受当前版本")
+                    break
+
+                old_draft = draft
                 draft = self.writer.rewrite(draft, feedback, plan, running_ctx, style_guide=state.style_guide, words_min=words_min, words_max=words_max)
+
+                # 变化检测
+                similarity = self._rewrite_similarity(old_draft, draft)
+                stale_rewrite = similarity > 0.92
+                if stale_rewrite:
+                    ui.warn(f"[审核] 重写相似度 {similarity:.0%}，内容几乎未修改")
+                    logger.info(f"Chapter {ch_num} rewrite #{retries} similarity={similarity:.2f}")
 
                 draft_path = dirs["drafts"] / f"chapter_{ch_num:02d}_r{retries}.txt"
                 draft_path.write_text(draft, encoding="utf-8")

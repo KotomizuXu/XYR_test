@@ -1,5 +1,6 @@
 """Writer agent: draft chapter text."""
 
+import json
 import logging
 import re
 
@@ -97,9 +98,19 @@ class WriterAgent(BaseAgent):
         words_min, words_max = self._resolve_words(words_min, words_max)
         system = self._build_system_prompt(words_min, words_max, style_guide, is_rewrite=True)
 
-        # 重写时不重复传入完整 running_context，只传审稿意见和草稿
-        # running_context 已在 system prompt 中通过风格指南体现，避免 token 叠加
-        user_msg = (
+        # 重写时传入 chapter_plan + 精简 running_context，让 writer 知道这章该写什么
+        plan_str = json.dumps(chapter_plan, ensure_ascii=False, indent=2) if chapter_plan else ""
+        ctx_cap = 30000
+        condensed_ctx = ""
+        if running_context:
+            condensed_ctx = running_context[:ctx_cap] + ("\n...(上下文已截断)" if len(running_context) > ctx_cap else "")
+
+        user_msg = ""
+        if plan_str:
+            user_msg += f"## 章节剧情计划（重写时必须遵循）\n{plan_str}\n\n"
+        if condensed_ctx:
+            user_msg += f"## 写作上下文\n{condensed_ctx}\n\n"
+        user_msg += (
             f"## 审稿意见（必须逐一修复，不能只做表面调整）\n{review_feedback}\n\n"
             f"## 原始草稿\n{draft}\n\n"
             f"## 重写要求\n"

@@ -199,8 +199,14 @@ flowchart TD
     end
 
     R3 --> DEC{approved?}
-    DEC --> |否 + major| LOOP[⑨ WriterAgent.rewrite<br/>最多重试N次]
-    LOOP --> REV
+    DEC --> |否 + major| LOOP[⑨ WriterAgent.rewrite<br/>含chapter_plan+context<br/>最多重试N次]
+    LOOP --> SIM{相似度>92%?}
+    SIM --> |是| ESC[升级策略<br/>追加高压提示]
+    SIM --> |否| REV
+    ESC --> REV2[⑧ ReviewerAgent.run]
+    REV2 --> QH{质量分趋势?}
+    QH --> |连续停滞| ACCEPT[提前接受<br/>warn重写无效]
+    QH --> |上升中| REV
     DEC --> |是| POST
 
     subgraph 后处理["章后处理"]
