@@ -37,8 +37,19 @@
 | 总章数 | `20` (`novel.default_chapters`) | `style_guide.suggestions.total_chapters.recommended` | `_collect_params` input | `state.total_chapters` |
 | 每章最少字数 | `3000` (`novel.words_per_chapter.min`) | `style_guide.suggestions.words_per_chapter.min` | `_collect_params` input | `state.novel_params` |
 | 每章最多字数 | `5000` (`novel.words_per_chapter.max`) | `style_guide.suggestions.words_per_chapter.max` | `_collect_params` input | `state.novel_params` |
-| 审核最大重写次数 | `3` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.review_max_retries`（I2 硬上限：≤3 轮重写） |
+| 审核最大重写次数 | `2` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.review_max_retries`（I2 硬上限：从 3 降为 2，覆盖 90% 修复场景同时降低 token 消耗，#184） |
 | 摘要最大字数 | `800` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.summary_max_length` |
+| 卷级摘要最大字数 | `1200` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.volume_summary_max_length`（Level 3 宏观摘要长度上限，#184） |
+| 卷级摘要触发最小章数 | `3` | —（无 AI 推荐） | —（直接用默认值） | config.yaml `novel.volume_summary_min_chapters`（卷内累计 ≥N 章才生成卷摘要，#184） |
+| 上下文预算·输出预留 | `9000` 字 | — | — | config.yaml `context_budget.reserved_output_chars`（#184） |
+| 上下文预算·Writer system 上限 | `40000` 字 | — | — | config.yaml `context_budget.writer_system_chars`（#184） |
+| 上下文预算·running_context 上限 | `50000` 字 | — | — | config.yaml `context_budget.running_context_chars`（#184，原 80000 写死） |
+| 上下文预算·tracking 上限 | `8000` 字 | — | — | config.yaml `context_budget.tracking_context_chars`（#184，原 15000 写死） |
+| 上下文预算·rewrite ctx 上限 | `8000` 字 | — | — | config.yaml `context_budget.rewrite_ctx_cap`（#184，原 30000 写死） |
+| 上下文预算·续写尾部字数 | `2000` 字 | — | — | config.yaml `context_budget.continuation_tail_chars`（#184） |
+| 上下文预算·近端完整摘要章数 | `3` | — | — | config.yaml `context_budget.recent_chapters_full`（#184） |
+| 上下文预算·中程精简摘要章数 | `7` | — | — | config.yaml `context_budget.recent_chapters_condensed`（#184） |
+| 上下文预算·检索锚点数 | `8` | — | — | config.yaml `context_budget.foreshadowing_top_k`（#184） |
 
 ### 用户交互输入（cmd_new）
 
@@ -250,9 +261,16 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | JSON 续写最大次数 | `3` | llm_client.py `max_continuations` |
 | 重试退避基数 | `2`（2s → 4s → 8s） | llm_client.py `wait = 2 ** (attempt + 1)` |
 | 摘要截取首尾字数 | `3000` 字 | context_manager.py |
-| 上下文总字符预算 | `60000` 字 | context_manager.py `MAX_CONTEXT_CHARS` |
-| 上下文压缩：保留最近 | `3` 章完整摘要 | context_manager.py |
-| 上下文压缩：压缩范围 | 第 4-10 章缩略 | context_manager.py |
+| 上下文总字符预算 | 动态（默认 `50000` 字，配置驱动） | context_manager.py `max_context_chars`（来源 `context_budget.running_context_chars`，#184 从 80000 硬编码改为配置） |
+| 上下文压缩：保留最近 | `3` 章完整摘要（配置驱动） | context_manager.py `recent_chapters_full`（#184） |
+| 上下文压缩：压缩范围 | 中程 `7` 章一句话摘要 + 更早聚合到卷级（配置驱动） | context_manager.py `recent_chapters_condensed`（#184，原硬编码"4-10 章缩略"） |
+| 三级金字塔摘要 | Level 3 卷级（卷末生成） + Level 2 章节（近 3 全/再 7 简） + Level 1 原文片段（近 3 章首尾各 750 字） | context_manager.py + pipeline.py `_collect_recent_excerpts` / `_maybe_generate_volume_summary`（#184） |
+| 检索锚点（伏笔/角色） | 按当前章节计划做相关度检索，top_k=8 注入 | tracker.py `query_relevant`（#184） |
+| Tracker 输出上限 | `8000` 字（调用方可传 `max_chars` 覆盖） | tracker.py `get_tracking_context(max_chars=...)`（#184，原硬编码 15000） |
+| 续写滑窗 | 仅回传 `plan_anchor (≤1500 字)` + 草稿尾部 `2000` 字 + 继续指令；不再无限累加 messages | llm_client.py `_continue_text` + writer.py `_plan_anchor`（#184，原 messages.append 累加会再次溢出） |
+| Token 估算系数 | 中文 1.5 token/字 / 英文 0.3 token/字 | llm_client.py `estimate_tokens`（#184） |
+| 调用前预算预警 | `est_input + reserved_output > max_tokens` 时 warn 日志 | llm_client.py `_check_budget`（#184） |
+| Writer rewrite ctx 上限 | `8000` 字（配置驱动） | writer.py `rewrite_ctx_cap`（来源 `context_budget.rewrite_ctx_cap`，#184，原硬编码 30000） |
 | 自动修复置信度阈值 | `0.9` | pipeline.py（reviewer 建议修复门槛） |
 | 短文续写触发比例 | `0.9`（90%） | writer.py（字数不足 words_min*90% 时续写） |
 | 世界观数据截断 | `2000` 字 | reviewer.py |
@@ -897,3 +915,34 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|----------|
 | #183 | 中等 | 审核循环存在"反复打回但不修改内容"风险，5 层叠加：(1) feedback 丢弃 reviewer 的 location 字段，writer 不知道问题在哪；(2) `writer.rewrite()` 接收 chapter_plan/running_context 参数但不写入 user_msg，重写时无剧情目标和上下文；(3) 无重写变化检测，重写输出与原文高度相似时系统无感知；(4) 全章重写策略导致局部问题引发全局震荡；(5) 无升级策略，重写无效时不会换方式 | `core/pipeline.py` — feedback 构建保留 location 字段；审核循环新增 `difflib.SequenceMatcher` 相似度检测（>92% 标记为"几乎未修改"）；质量分趋势追踪（`quality_history`，连续两轮未上升则提前终止）；升级策略（上次未修改时追加高压提示）。`agents/writer.py` — `rewrite()` user_msg 新增 chapter_plan（剧情计划）和 running_context（精简至 30K 字符的写作上下文） |
+
+### 2026-05-26 max_tokens 截断系统性治理（#184）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #184 | 严重 | 300 章规模下各阶段频繁因 max_tokens 截断，7 类根因叠加：(R1) Writer system prompt 31K+constitution+style ≈ 55K token 挤掉一大半预算；(R2) `MAX_CONTEXT_CHARS=80000` 写死且不与 system 联动，user 80K+system 35K 直接爆 131K；(R3) `_continue_text` 每轮把 `assistant(continuation)+user("继续")` append 到 messages，第 3 次续写时再次溢出；(R4) Plotter 已规划摘要拼接无上限（300 章可达 50K+ 字）；(R5) `get_tracking_context` 全局封顶 15K，writer 收到的还是未截断版；(R6) 摘要分层只保最近 10 章，290 章前完全丢失，长伏笔跨不过；(R7) review_max_retries=3 × writer/reviewer 重传完整 ctx，单章最差 9 次 LLM 调用 | **config.yaml** — 新增 `context_budget` 配置块（10 项预算参数）+ `volume_summary_max_length`/`volume_summary_min_chapters` + `review_max_retries: 3→2`；**core/llm_client.py** — 新增 `estimate_tokens`/`estimate_messages_tokens` token 估算 + `_check_budget` 调用前预警；`_continue_text` 改为滑窗（仅传 user_anchor+草稿尾部 2000 字+继续指令，不再累加）；**core/context_manager.py** — `MAX_CONTEXT_CHARS` 改为动态 `max_context_chars`（从 config 读取）；新增 `generate_volume_summary`（Level 3 卷级摘要，保留原作笔触）；`build_running_context` 改为三级金字塔（L3 卷宏观 + L2 章节摘要 + L1 原文片段 + 检索锚点），接受新参数 `volume_summaries`/`recent_chapter_excerpts`/`relevant_anchors`；**core/tracker.py** — `get_tracking_context(max_chars=...)` 支持调用方传截断上限；新增 `query_relevant(plan, current_chapter, top_k)` 按章节计划做相关度检索（伏笔/角色/关系），避免全量注入；**core/pipeline.py** — 章节循环传 `tracking_max_chars` + 调用 `query_relevant` 取锚点 + `_collect_recent_excerpts` 取 Level 1 片段；卷末调用 `_maybe_generate_volume_summary` 生成 Level 3 摘要；`_edit_chapters` 同步加 `max_chars`；**core/state_manager.py** — `NovelState` 新增 `volume_summaries: dict | None` 持久化字段，`load` 时还原 int key；**agents/writer.py** — 续写改用 `_plan_anchor` 锚点（≤1500 字）+ 草稿尾部，不再传完整 user_msg；`rewrite_ctx_cap` 从硬编码 30000 改为配置驱动默认 8000；**agents/plotter.py** — `_build_existing_summaries` 输出加 `EXISTING_SUMMARIES_CHAR_CAP=20000` 上限；**agents/base.py** — 新增 `_load_genre_fragment` 题材片段按需注入接口（prompts/fragments/<agent>/<genre>.txt 为空时 behavior 不变，为后续 prompt 瘦身保留扩展点）；**prompts/fragments/** — 新建目录 + README.md 说明片段拆分约定 |
+
+
+### 2026-05-26 Refine/Braindump 调整无变化防御（#185）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #185 | 中等 | 北极星阶段（及 Director refine_block 四块）用户提"调整"意见后 LLM 返回与原版几乎一致的内容，体感"调整无效"。根因：adjust 路径 prompt 软弱（仅"请根据用户意见修改"），无升温也无相似度自检 | `core/braindump.py` — 新增 `_ADJUST_DIRECTIVE` system 段；`_build_braindump_system` 新增 `is_adjust` 参数；adjust 路径升温 0.75，自带 `_too_similar`（SequenceMatcher ≥0.9）相似度检测；无变化时自动升温 0.95 + rewrite-directive 重试 1 次。`core/pipeline.py` — `_llm_refine` 新增 `force_rewrite` 参数（升温 0.9 + 加"必须实质修改"约束）；`_refine_block` adjust 路径新增 `_refine_too_similar`（JSON 序列化后比对 ≥0.92），无变化时自动升温重试 1 次 |
+
+### 2026-05-26 LLM JSON 解析失败重试（#186）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #186 | 严重 | GLM 偶发返回非法 JSON（字符串漏闭合引号 + 漏字段间逗号），`parse_json` 直接抛 `ValueError` 中断 plotter 阶段；`chat_json` 原仅重试 API 错误，解析错误不重试 | `core/llm_client.py` — `parse_json` 新增 `_repair_unclosed_string` 启发式修补：正则识别"字段内容 + 空格 + 下一个 `\"key\":`"模式，自动插入 `\", `；`chat_json` 捕获 `ValueError` 并重试（默认 3 次），把上次错误样本回灌给 LLM 并明确格式约束（双引号闭合 / 字段间逗号 / 不含代码块 / 不含 JSON 外文字） |
+
+### 2026-05-26 分卷规划范围异常修复（#187）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #187 | 严重 | 用户看到"两个第二卷、缺第一卷/第三卷"，根因两层：(1) `_collect_volume_definitions` prompt 未约束 title 不含"第N卷"前缀，LLM 自加"第二卷·觉醒"→前端 `卷{number} {title}` 拼成"卷1 第二卷·觉醒"视觉重复；(2) 章节范围未连续覆盖 1..total，LLM 给 `[(11-15), (16-25)]` 时 1-10 漂浮，按 start_chapter 过滤后某些卷为空 | `core/pipeline.py` — prompt 加 5 条硬性约束（第一卷从 1 起、最后一卷到 total、连续不重叠、title 不含'第N卷'前缀、每卷 8-15 章）；新增 `_PREFIX_RE` 清洗 LLM 自加的'第N卷/卷X/第N幕/Volume N'前缀；新增 `_normalize_volume_ranges` 把 LLM 给的 start/end 按顺序重建为从 1 起、连续、最后一卷到 total 的区间，丢弃越界卷 |
+
+### 2026-05-26 Plotter title 卷名前缀清洗（#188）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #188 | 中等 | Plotter 跨批次生成时偶发把卷名作为前缀拼进章节 `title`（如第 16 章 `"第二卷：虚假生路 - 沉溺"`、第 20 章 `"第二卷：虚假生路 - 献祭"`），前端展示 `第N章 {title}` 出现重复卷名；该小说本身 `volumes=null` 也会发生（LLM 自行脑补） | `prompts/plotter_system.txt` — title 字段约束改为"只写本章主题词组，4-12 字；禁止以'第N卷'/'卷X'/'第N幕'/'Volume N'/卷名/幕名作前缀"；`agents/plotter.py` — 新增 `_sanitize_title` 静态方法 + `_TITLE_PREFIX_RE`，`_generate_batch` 入 list 前自动清洗；**故意不清"第N章"前缀**——避免误杀"第三章隔间"这类合法剧情元素；存量 state 已 patch（`output/血色白纸鹤/novel_state.json` 第 16/20 章已修正，备份 `.bak`） |

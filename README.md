@@ -510,6 +510,35 @@ Web 前端体验全面优化：
 - `pipeline.py` 新增升级策略：上次重写几乎未修改时追加高压提示要求大幅重组（#183）
 - `writer.py` `rewrite()` user_msg 新增 chapter_plan + 精简 running_context，让 writer 重写时有剧情目标和上下文（#183）
 
+### 2026-05-26 Refine/Braindump 调整无变化防御（#185）
+
+修复北极星阶段（及 Director refine_block 四块）"用户提调整意见后输出与原版几乎一致"问题：
+
+- `core/braindump.py` 新增 `_ADJUST_DIRECTIVE` system 段 + `_too_similar`（SequenceMatcher ≥0.9）相似度检测；adjust 路径升温到 0.75，无变化时自动升温 0.95 + rewrite-directive 重试 1 次
+- `core/pipeline.py` `_llm_refine` 新增 `force_rewrite` 参数；`_refine_block` adjust 路径调用 `_refine_too_similar`（JSON 序列化后比对 ≥0.92），无变化时自动升温 0.9 重试
+
+### 2026-05-26 LLM JSON 解析失败重试（#186）
+
+修复 plotter 偶发因 GLM 返回非法 JSON（漏闭合引号 + 漏字段间逗号）直接抛 `ValueError` 中断的问题：
+
+- `core/llm_client.py` `parse_json` 新增 `_repair_unclosed_string` 启发式修补：识别"字段内容 + 空格 + 下一个 `"key":`"模式，自动插入 `", `
+- `core/llm_client.py` `chat_json` 捕获 `ValueError` 并重试（默认 3 次），回灌错误样本 + 明确格式约束（双引号闭合 / 字段间逗号 / 不含代码块 / 不含 JSON 外文字）
+
+### 2026-05-26 分卷规划范围异常修复（#187）
+
+修复"两个第二卷、缺第一卷/第三卷"现象：
+
+- `core/pipeline.py` `_collect_volume_definitions` prompt 加 5 条硬性约束（第一卷从 1 起、最后一卷到 total、连续不重叠、title 不含'第N卷'前缀、每卷 8-15 章）
+- `core/pipeline.py` 新增 `_PREFIX_RE` 清洗 LLM 自加的'第N卷/卷X/第N幕/Volume N'等前缀
+- `core/pipeline.py` 新增 `_normalize_volume_ranges` 把 LLM 给的 start/end 重建为连续覆盖 1..total 的区间
+
+### 2026-05-26 Plotter title 卷名前缀清洗（#188）
+
+修复章节标题渲染时出现"第N章 第二卷：xx-xx"重复卷名：
+
+- `prompts/plotter_system.txt` title 字段约束改为"只写本章主题词组，4-12 字；禁止以'第N卷'/'卷X'/'第N幕'/'Volume N'/卷名/幕名作前缀"
+- `agents/plotter.py` 新增 `_sanitize_title` 静态方法 + `_TITLE_PREFIX_RE` 正则，`_generate_batch` 入 list 前自动清洗。**故意不清"第N章"**——避免误杀"第三章隔间"这类合法剧情元素
+
 ## 致谢
 
 本项目通过 `skills-lock.json` 锁定了两个外部 skill 作为方法论来源：

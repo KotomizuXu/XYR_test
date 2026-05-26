@@ -1698,7 +1698,7 @@ class Tracker:
 
     # --- Build tracking context for agents ---
 
-    def get_tracking_context(self, current_chapter: int) -> str:
+    def get_tracking_context(self, current_chapter: int, max_chars: int | None = None) -> str:
         parts = []
         strictness = self._get_strictness()
         disabled = self._read_json("config.json").get("disabled_checks", [])
@@ -1936,6 +1936,83 @@ class Tracker:
                 parts.append("\n".join(lines))
 
         result = "\n\n".join(parts) if parts else ""
-        if len(result) > 15000:
-            result = result[:15000] + "\n\n...(追踪数据已截断，仅保留最近内容)"
+        # 字符上限：调用方传入优先，否则使用历史默认 15000（保留旧行为）
+        cap = max_chars if max_chars is not None else 15000
+        if cap > 0 and len(result) > cap:
+            result = result[:cap] + "\n\n...(追踪数据已截断，仅保留最近内容)"
         return result
+
+    def query_relevant(self, plan: dict, current_chapter: int, top_k: int = 8) -> str:
+        """按当前章节计划中提到的角色/伏笔做相关度检索，只取 top_k 条注入。
+
+        Why: 300 章累积后伏笔/关系网线性增长，全量注入会爆 token；只挑与本章相关的。
+        How to apply: ContextManager 在 build_running_context 时按预算调用此函数替代/补充
+        get_tracking_context 的全量输出。
+        """
+        if not plan:
+            return ""
+        plan_blob = json.dumps(plan, ensure_ascii=False)
+        # 提取本章计划提到的角色名（characters_involved / characters_on_stage）和伏笔关键词
+        mentioned_chars = set()
+        for k in ("characters_involved", "characters_on_stage"):
+            for c in plan.get(k, []) or []:
+                if isinstance(c, str):
+                    mentioned_chars.add(c)
+        plan_text = plan_blob
+
+        scored = []  # (score, line)
+
+        # 伏笔评分：按内容关键词与计划文本的交集 + 章节距离衰减
+        plot_tracker = self._read_json("plot_tracker.json")
+        for fs in plot_tracker.get("foreshadowing", []) or []:
+            if not isinstance(fs, dict):
+                continue
+            content = fs.get("content", "")
+            if not content:
+                continue
+            status = fs.get("status", "")
+            if status in ("revealed", "resolved"):
+                continue
+            planted_ch = (fs.get("planted") or {}).get("chapter") or 0
+            # 关键词重叠：拆中文 2-gram 简单交集
+            score = 0
+            for token in re.findall(r'[一-鿿]{2,}', content):
+                if token in plan_text:
+                    score += 2
+            # 距离衰减
+            dist = abs(current_chapter - planted_ch) if planted_ch else 100
+            score += max(0, 10 - dist // 20)
+            if score > 0:
+                hint_str = ""
+                if fs.get("hints"):
+                    hint_str = f"（提示：{'; '.join(fs['hints'][-2:])}）"
+                scored.append((score, f"- [伏笔/{fs.get('id', '')}] 第{planted_ch}章埋：{content}{hint_str}"))
+
+        # 角色评分：当前章节计划提到的角色
+        char_state = self._read_json("character_state.json")
+        for name, data in (char_state.get("supportingCharacters", {}) or {}).items():
+            if name in mentioned_chars:
+                status = (data.get("status") or {})
+                loc = status.get("currentLocation", "")
+                last = (status.get("lastSeen") or {})
+                ch = last.get("chapter") if isinstance(last, dict) else last
+                scored.append((20, f"- [角色/{name}] 位置：{loc or '未知'}，最后出场：第{ch or '?'}章"))
+
+        # 关系评分
+        relationships = self._read_json("relationships.json")
+        for name, data in (relationships.get("characters", {}) or {}).items():
+            if name not in mentioned_chars:
+                continue
+            rels = data.get("relationships", {}) or {}
+            active = []
+            for cat, members in rels.items():
+                if members and cat not in ("neutral", "unknown"):
+                    active.append(f"{cat}：{', '.join(members[:3])}")
+            if active:
+                scored.append((15, f"- [关系/{name}] {'；'.join(active[:3])}"))
+
+        scored.sort(key=lambda x: -x[0])
+        picked = [line for _, line in scored[:top_k]]
+        if not picked:
+            return ""
+        return "## 相关锚点（按本章计划检索）\n" + "\n".join(picked)

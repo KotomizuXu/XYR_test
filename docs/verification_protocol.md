@@ -742,19 +742,24 @@
 
 ---
 
-**K8. 长篇（≥100 章）上下文安全验证**
+**K8. 长篇（≥100 章）上下文安全验证（#184 重构后）**
 
-检查目标：300 章小说场景下，所有 Agent 的 LLM 输入不超出 128K token 上下文窗口。
+检查目标：300 章小说场景下，所有 Agent 的 LLM 输入不超出 128K token 上下文窗口；预算从硬编码改为配置驱动后，各层截断与配置项一致。
 
 检查方法：
-1. 确认 Plotter `_build_existing_summaries` 输出不超过 3K 字符（`MAX_SUMMARY_FULL=30`/`MAX_SUMMARY_SHORT=50`）
-2. 确认 `get_tracking_context` 总输出 ≤15K 字符（硬限截断）
-3. 确认 `_truncate_context` 中 tracking_context ≤10K 字符（硬限截断）
-4. 确认 Writer 续写 `chat_with_history` 的原始 context 截断到 40K 字符
-5. 确认 Critic world_data 截断到 2K + tracking 截断到 10K
-6. 确认 Tracker `update_tracking`/`_consume_review` 对无上限数组滑动窗口裁剪（30-50 条）
+1. 确认 `config.yaml` 含 `context_budget` 配置块，所有 10 项预算键齐全（reserved_output_chars / writer_system_chars / running_context_chars / tracking_context_chars / rewrite_ctx_cap / continuation_tail_chars / recent_chapters_full / recent_chapters_condensed / foreshadowing_top_k）
+2. 确认 `core/context_manager.py` 不再有 `MAX_CONTEXT_CHARS = 80000` 硬编码，改用 `self.max_context_chars`（来源 `context_budget.running_context_chars`，默认 50000）
+3. 确认 `core/tracker.py` `get_tracking_context(max_chars=...)` 默认 15000 兼容旧行为，但 pipeline 调用必传 `tracking_context_chars`（默认 8000）
+4. 确认 Plotter `_build_existing_summaries` 末尾切片 `[:EXISTING_SUMMARIES_CHAR_CAP]`（默认 20000）
+5. 确认 Writer 续写不再传完整 user_msg，改用 `_plan_anchor(≤1500 字) + 草稿尾部 continuation_tail_chars 字`
+6. 确认 Writer `rewrite_ctx_cap` 改为配置驱动（默认 8000），不再硬编码 30000
+7. 确认 `llm_client._continue_text` 不再 `messages.append(assistant); messages.append(user)` 累加，改为每轮重建滑窗 `[user_anchor, assistant(tail), user(continue)]`
+8. 确认 `pipeline.NovelPipeline._collect_recent_excerpts` 取 `recent_chapters_full` 章，每章首尾各 750 字（`max_chars_per_ch=1500`）
+9. 确认 `pipeline._maybe_generate_volume_summary` 仅在 `ch_num == cur_vol.end_chapter` 且 `len(vol_chapter_summaries) >= volume_summary_min_chapters` 时触发
+10. 确认 `state_manager.NovelState.volume_summaries` 字段持久化到 state.json，`load` 时还原 int key
+11. 确认 Tracker `update_tracking`/`_consume_review` 对无上限数组滑动窗口裁剪（30-50 条）保持不变
 
-通过条件：所有截断点存在且阈值合理，无 Agent 输入超过 ~60K 字符（~90K token）
+通过条件：所有截断点均改为配置驱动；估算总输入 = system(≤40K 字) + user(≤50K 字) + 输出预留(≤9K 字) ≈ 99K 字 ≈ 148K token——若 default_max_tokens 设为 65535 则 `_check_budget` 会触发 warn 提示压缩
 
 ---
 
@@ -770,6 +775,87 @@
 5. 确认 `ui.error` 消息出现在前端消息流中（不只在 `n-alert`）
 
 通过条件：所有已知错误类型有对应中文提示，不出现原始 Python 异常文本
+
+---
+
+**K10. 三级金字塔 running_context 装配（#184）**
+
+检查目标：`context_manager.build_running_context` 输出包含 L3（卷宏观）/ L2（章节摘要 Tier1+Tier2）/ L1（原文片段）/ 锚点 四个部分；按当前章号正确选择历史卷。
+
+检查方法：
+1. 模拟 50 章 + 2 卷场景，第 30 章正在写：传入 `volume_summaries={1: "..."}`、`recent_chapter_excerpts=[3 章片段]`、`relevant_anchors="## 锚点..."`
+2. 确认输出包含 `## 历史卷宏观结构（远端记忆）` 段，且只列第 1 卷（当前卷及之后跳过）
+3. 确认 `_find_volume_number(volumes, ch_num)` 返回正确卷号；无 volumes 时仍能输出 L3（按 vol_num 排序全列）
+4. 确认 Tier1 取最近 `recent_chapters_full` 章完整摘要、Tier2 取再往前 `recent_chapters_condensed` 章简短摘要
+5. 确认 L1 段标题为 `## 近端原文片段（保持文风延续）`，章号从 `current_chapter - len(recent_excerpts)` 起算
+6. 确认无任何输入时回退 `"（这是第一章）"`
+
+通过条件：四层结构按预算配置生成；超 `max_context_chars` 时 `_hard_truncate` 触发 warn 并尾部截断
+
+---
+
+**K11. 检索锚点 query_relevant（#184）**
+
+检查目标：`tracker.query_relevant` 按当前章节计划提到的角色 / 伏笔关键词做相关度评分，只返回 top_k 条。
+
+检查方法：
+1. 构造 `plan = {"characters_involved": ["李白"], "summary": "李白在长安遇刺"}`
+2. 在 `plot_tracker.json` 中放入 3 条伏笔（含"长安"关键词的得分应高于无关词）
+3. 在 `character_state.supportingCharacters["李白"]` 中放入 status / lastSeen，确认得分 +20 注入位置/出场章
+4. 在 `relationships.characters["李白"].relationships` 中放入 `friend: [...]`，确认得分 +15 注入关系
+5. 确认 `status in ("revealed", "resolved")` 的伏笔被过滤
+6. 确认距离衰减：`planted_chapter` 离 `current_chapter` 越远得分越低（每 20 章 -1）
+7. 确认输出含 `## 相关锚点（按本章计划检索）` 段头，且总条数 ≤ `top_k`
+
+通过条件：评分排序正确、过滤生效、top_k 截断生效、空结果返回 `""`
+
+---
+
+**K12. Token 估算与预算预警（#184）**
+
+检查目标：`llm_client.estimate_tokens` / `estimate_messages_tokens` / `_check_budget` 在调用前给出截断风险预警。
+
+检查方法：
+1. 单测 `estimate_tokens("中文测试abc")` ≈ `int(4 * 1.5 + 3 * 0.3) = 6`
+2. 单测 `estimate_messages_tokens` 含每条消息 4 token 元数据开销
+3. 构造 system + messages 总估算 > `default_max_tokens - reserved_output_tokens` 场景，确认 `logger.warning` 触发，包含 `[budget]` 前缀和具体数字
+4. 确认 `_check_budget` 不阻塞调用、仅 warn（让 API 自行处理截断）
+5. 确认 `_call_api` 调用前必经 `_check_budget`
+
+通过条件：估算误差 < 10%；预警触发条件准确；不影响正常调用
+
+---
+
+**K13. 卷级摘要生成与持久化（#184）**
+
+检查目标：`pipeline._maybe_generate_volume_summary` 在卷末触发一次生成，结果落盘 state；`generate_volume_summary` 保留原作笔触。
+
+检查方法：
+1. 模拟卷定义 `VolumeDef(number=1, start_chapter=1, end_chapter=10, title="启程")`，第 10 章完成后触发
+2. 确认 `state.volume_summaries[1]` 写入文本，长度 ≤ `volume_summary_max_length`（默认 1200 字）
+3. 确认 `len(vol_chapter_summaries) < volume_summary_min_chapters` 时跳过（默认 3）
+4. 确认已存在 `state.volume_summaries[cur_vol.number]` 时不重复生成
+5. 确认 `state_manager.load` 反序列化时把 JSON 字符串 key 还原为 int key（`{int(k): v for ...}`）
+6. 确认 `generate_volume_summary` 的 system prompt 含"保持基调"（来自 `style_guide.tone.overall`），与正文笔触一致
+7. 异常时只 warn 不抛，下一卷仍能继续生成
+
+通过条件：仅卷末触发一次、字数 / 章数门槛生效、持久化往返保 int key、异常不阻断主流程
+
+---
+
+**K14. 用户输入/反馈→LLM 真实生效检查（#185 / #186 / #187 / #188）**
+
+检查目标：用户在交互阶段提的调整意见、分卷范围、章节标题等输入，在 LLM 端不被静默丢弃、不被前缀污染、不被相似输出敷衍。
+
+检查方法：
+1. **Braindump adjust（#185）**：依次进入北极星/概念/主题/结构 4 个 section，每个选"调整"并给具体修改意见（如"再凝练一点"）。确认 `core/braindump.py` `_too_similar` 触发后日志出现"检测到{label}调整后变化过小，自动升温重试..."且第二次结果与原版 SequenceMatcher ratio < 0.9
+2. **Director refine_block adjust（#185）**：进入 world/characters/locations/outline 任一块，选"调整"。确认 `_llm_refine` 在 `force_rewrite=True` 时 temperature=0.9 + user_msg 含"必须实质性修改"约束；JSON 序列化后比对 ≥0.92 触发重试
+3. **JSON 解析容错（#186）**：构造 GLM 返回中漏闭合引号的样本（如 `"summary": "xxx "next_key": "..."`），喂入 `parse_json` 应通过 `_repair_unclosed_string` 修复并返回 dict；构造完全无法修复的样本时，`chat_json` 应重试 3 次并把上次错误样本回灌给 LLM
+4. **分卷规划范围（#187）**：模拟 LLM 给 `[("觉醒","11-15"), ("终局","16-25")]`，total=30。`_normalize_volume_ranges` 应输出 `[(1, "觉醒", 1, 15), (2, "终局", 16, 30)]`——起点强制从 1、终点强制到 total
+5. **分卷 title 前缀清洗（#187）**：模拟 LLM 返回 title=`"第二卷·觉醒"`/`"卷三 终局"`/`"Vol.2 风暴"`，`_PREFIX_RE.sub` 应清洗为 `"觉醒"`/`"终局"`/`"风暴"`
+6. **Plotter title 前缀清洗（#188）**：模拟 LLM 返回 plan title=`"第二卷：虚假生路 - 沉溺"`，`PlotAgent._sanitize_title` 应清洗为 `"虚假生路 - 沉溺"`；同时确认 title=`"第三章隔间"` 不被误杀（_TITLE_PREFIX_RE 不含"第N章"分支）
+
+通过条件：每条用户输入/反馈都能映射到 LLM prompt 的具体段落；输出有相似度自检兜底；卷范围 / title 前缀污染在入 state 前被清洗
 
 ---
 
@@ -830,5 +916,5 @@
 
 ---
 
-*最后验证执行时间：2026-05-23（全量自检 A1-K9 + #159-#166 修复）*
-*协议版本：1.8*
+*最后验证执行时间：2026-05-26（#184-#188 治理 + K8 重构 + K10-K14 补充）*
+*协议版本：1.10*

@@ -63,6 +63,10 @@ class NovelState:
     refined_blocks: list[str] = field(default_factory=list)
     # 可选分卷结构，None 表示不分卷
     volumes: list[VolumeDef] | None = None
+    # 卷级宏观摘要（Level 3 长程记忆）：{卷号(int): 摘要文本}。
+    # Why: 300 章场景下，章节摘要必须再聚合为卷级，避免 running_context 线性膨胀。
+    # 持久化到 state，避免每次续写都重新调用 LLM 重生成。
+    volume_summaries: dict | None = None
 
     def __post_init__(self):
         if not self.created_at:
@@ -93,8 +97,11 @@ class StateManager:
         chapters = [ChapterState(**{k: v for k, v in ch.items() if k in ChapterState.__dataclass_fields__}) for ch in data.pop("chapters", [])]
         vol_data = data.pop("volumes", None)
         volumes = [VolumeDef(**v) for v in vol_data] if vol_data else None
+        # JSON 不支持 int key，反序列化时还原 volume_summaries 的卷号为 int
+        vs_raw = data.pop("volume_summaries", None)
+        volume_summaries = {int(k): v for k, v in vs_raw.items()} if vs_raw else None
         valid = {k: v for k, v in data.items() if k in NovelState.__dataclass_fields__}
-        return NovelState(**valid, chapters=chapters, volumes=volumes)
+        return NovelState(**valid, chapters=chapters, volumes=volumes, volume_summaries=volume_summaries)
 
     def list_novels(self) -> list[str]:
         if not OUTPUT_DIR.exists():

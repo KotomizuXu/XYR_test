@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+
 from core.llm_client import LLMClient
 from core.pipeline import load_config
 from core.prompt_utils import UserAbort, prompt_choice, prompt_multiline
@@ -48,18 +50,37 @@ _REWRITE_DIRECTIVE = """
 用户对上一版不满意，请彻底换一种思路、措辞、角度，与上一版表述明显不同；避免在原方向上做表面调整。"""
 
 
+_ADJUST_DIRECTIVE = """
+
+## 调整要求（用户给了明确修改意见）
+必须按用户意见做**实质性**修改：
+- 改动用户指出的部分，重新组织措辞、节奏或角度，不要只换同义词或调标点
+- 保留用户没要求改的部分的核心信息
+- 输出与原版表述明显不同，不得近乎复制原文"""
+
+
 # ---------------------------------------------------------------------------
 # 内部函数
 # ---------------------------------------------------------------------------
 
-def _build_braindump_system(style: str | None, is_rewrite: bool = False) -> str:
+def _build_braindump_system(style: str | None, is_rewrite: bool = False,
+                            is_adjust: bool = False) -> str:
     parts = [_BRAINDUMP_SYSTEM_BASE]
     if style:
         parts.append(_BRAINDUMP_STYLE_GUIDANCE.format(style=style))
     parts.append(_BRAINDUMP_NEUTRAL_TAIL)
     if is_rewrite:
         parts.append(_REWRITE_DIRECTIVE)
+    if is_adjust:
+        parts.append(_ADJUST_DIRECTIVE)
     return "".join(parts)
+
+
+def _too_similar(a: str, b: str, threshold: float = 0.9) -> bool:
+    """两版文本是否高度相似（用于检测"调整无效"）。"""
+    if not a or not b:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= threshold
 
 
 def _confirm(label: str) -> str:
@@ -140,11 +161,36 @@ def _braindump_section(llm: LLMClient, section_key: str, section_label: str,
                 break
 
             ui.info(f"收到，根据你的意见调整：{action[:120]}{'...' if len(action) > 120 else ''}")
+            prev_for_adjust = result
+            adjust_user_msg = (
+                f"## 上下文\n{context}\n\n"
+                f"## 之前生成的{section_label}\n{prev_for_adjust}\n\n"
+                f"## 用户的调整意见\n{action}\n\n"
+                f"请按用户意见**实质性**修改{section_label}，与上一版表述明显不同。只输出修改后的内容。"
+            )
             result = llm.chat(
-                _build_braindump_system(style),
-                f"## 上下文\n{context}\n\n## 之前生成的{section_label}\n{result}\n\n## 用户的调整意见\n{action}\n\n请根据用户意见修改{section_label}，只输出修改后的内容。",
-                temperature=0.7,
+                _build_braindump_system(style, is_adjust=True),
+                adjust_user_msg,
+                temperature=0.75,
             ).strip()
+
+            # 调整后若几乎没变化，自动升温重试一次并给出更强约束
+            if _too_similar(prev_for_adjust, result):
+                ui.warn(f"检测到{section_label}调整后变化过小，自动升温重试...")
+                retry_msg = (
+                    f"## 上下文\n{context}\n\n"
+                    f"## 之前生成的{section_label}（与下面这次几乎相同，已被判定为未实质修改）\n{prev_for_adjust}\n\n"
+                    f"## 用户的调整意见\n{action}\n\n"
+                    f"请**彻底重写**{section_label}：换措辞、换节奏、换角度，落实用户的调整意见，"
+                    f"输出必须与上一版表述明显不同，否则视为失败。只输出修改后的内容。"
+                )
+                result = llm.chat(
+                    _build_braindump_system(style, is_adjust=True, is_rewrite=True),
+                    retry_msg,
+                    temperature=0.95,
+                ).strip()
+                if _too_similar(prev_for_adjust, result):
+                    ui.warn("AI 仍未给出明显不同的版本，保留当前结果，可选择'重写'换方向")
 
             ui.show_braindump_result(section_label, result, modified=True)
 

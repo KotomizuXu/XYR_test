@@ -216,31 +216,60 @@ relationships.json, validation_rules.json, locations.json
 
 ## 四、Context 构建链路
 
-| *最后验证：2026-05-23* —
+| *最后验证：2026-05-26* —
 
-### 4.1 build_running_context 组装
+### 4.1 build_running_context 组装（#184 三级金字塔）
 
 ```
 FULL_CONTEXT_TEMPLATE:
-  ## 世界观与角色参考    ← _condense_world(world_data)
-  ## 故事主线            ← _condense_outline(outline)
-  ## 前文摘要            ← _format_summaries(completed_summaries)
-  ## 追踪数据            ← get_tracking_context(chapter_num)
-  ## 当前章节剧情要点    ← _format_chapter_plan(plan)
+  ## 当前卷信息（如分卷）  ← _format_volume_info(volumes, chapter_number)
+  ## 用户原始需求         ← story_idea[:1000]
+  ## 世界观与角色参考     ← _condense_world(world_data)
+  ## 故事主线             ← _condense_outline(outline)
+  ## 前文摘要             ← _build_layered_summaries（三级金字塔）：
+       ## 历史卷宏观结构（远端记忆）       ← volume_summaries（Level 3，卷末由 generate_volume_summary 生成，每卷 ≤1200 字）
+       ## 中程章节梗概                     ← summaries[-recent_chapters_full-condensed:-recent_chapters_full]（一句话精简，默认 7 章）
+       ## 最近章节摘要                     ← summaries[-recent_chapters_full:]（完整摘要，默认 3 章）
+       ## 近端原文片段（保持文风延续）     ← recent_chapter_excerpts（Level 1，pipeline._collect_recent_excerpts 取每章首尾各 750 字）
+       ## 相关锚点（按本章计划检索）       ← relevant_anchors（tracker.query_relevant，top_k=8 伏笔/角色/关系）
+  ## 追踪数据             ← tracker.get_tracking_context(max_chars=8000)
+  ## 当前章节剧情要点     ← _format_chapter_plan(plan)
 ```
 
-**检查点**：新增字段时，确认它在上述哪个环节被提取。如果字段在 `_condense_*` 或 `_format_*` 中缺失，下游 Agent 永远看不到它。
+**预算控制**：
+- 总预算 `max_context_chars` 默认 50000 字（来源 `config.context_budget.running_context_chars`），超出会硬截断 + warn
+- `tracking_context` 二次截断：调用方传入 `max_chars`，ContextManager 端再 cap 一次
+- 续写场景：writer.py 不再传完整 user_msg，改用 `_plan_anchor(≤1500 字) + 草稿尾部 2000 字`（来源 `context_budget.continuation_tail_chars`）
+
+**Level 3 卷级摘要生成时机**：
+- pipeline `_maybe_generate_volume_summary` 在 `tracker.advance_volume` 触发后调用
+- 仅在 `ch_num == cur_vol.end_chapter` 且本卷已累计 `volume_summary_min_chapters`（默认 3）章摘要时生成
+- 结果存入 `state.volume_summaries: dict[int, str]`（持久化到 novel_state.json）
+
+**检查点**：新增字段时，确认它在 `_condense_*` / `_format_*` / `_build_layered_summaries` 中被提取。如果字段在这些环节缺失，下游 Agent 永远看不到它。
 
 ### 4.2 上下文注入点
 
-`tracking_context` 注入以下 Agent：
+`tracking_context` 注入以下 Agent（均通过 `max_chars=context_budget.tracking_context_chars` 截断）：
 
 | Agent | 注入方式 | 位置 |
 |-------|---------|------|
-| Writer | `running_context` 的一部分 | pipeline.py `_write_chapters` → `writer.run(plan, running_ctx)` |
+| Writer | `running_context` 的一部分（含三级金字塔 + relevant_anchors） | pipeline.py `_write_chapters` → `writer.run(plan, running_ctx)` |
 | Reviewer | 独立参数 `tracking_context` | pipeline.py `_write_chapters` → `reviewer.run(..., tracking_context=tracking_ctx)` |
-| Editor | 独立参数 `tracking_context` | pipeline.py `_edit_chapters` → `editor.run(..., tracking_context=tracking_ctx)` |
+| Editor | 独立参数 `tracking_context`（_edit_chapters 阶段同样按 `max_chars` 截断） | pipeline.py `_edit_chapters` → `editor.run(..., tracking_context=tracking_ctx)` |
 | Critic | 独立参数 `tracking_context` | pipeline.py `revise_chapter` → `critic.run(..., tracking_context=tracking_ctx)` |
+
+### 4.3 Token 预算预警链路（#184）
+
+```
+任意 LLMClient.chat/chat_json/chat_with_history
+  → _call_api
+  → _check_budget(system_prompt, messages)
+     → estimate_messages_tokens（中文 1.5×字、英文 0.3×字 + 每条 4 token 元数据）
+     → 若 est + reserved_output(9000×1.5) > max_tokens(131072) → logger.warning
+```
+
+**检查点**：日志中频繁出现 `[budget] ... 估算输入 ... 可能截断` → 说明上层 context 组装未按预算压缩，需检查 `context_budget.*` 配置是否过大或 system prompt 是否需要按题材剥离（见 prompts/fragments/）。
 
 ---
 
@@ -277,19 +306,22 @@ FULL_CONTEXT_TEMPLATE:
 ### 6.2 字数续写
 
 ```
-writer.run → chat() → 检查 _count_chinese_chars(text) < words_min * 0.9 → chat_with_history 续写
+writer.run → chat() → 检查 _count_chinese_chars(text) < words_min * 0.9
+          → chat_with_history(messages=[plan_anchor, draft_tail, "继续"]) 续写（#184 滑窗）
 ```
 
 **检查点**：
 - `0.9` 阈值硬编码在 `writer.py` 中
-- **#90 I1 修复**：原 `len(text)`（含 Markdown 标记/空行/标点的总字符）→ 改为 `_count_chinese_chars(text)`（剥离 Markdown 后只统计 `[一-鿿]` 范围的中文字符），与 `chinese-novelist-skill/scripts/check_chapter_wordcount.py` 算法一致。原算法易被空行/标点/Markdown 标题"虚假撑长度"骗过续写阈值
+- **#90 I1**：原 `len(text)`（含 Markdown/标点）→ 改为 `_count_chinese_chars(text)`（剥离 Markdown 后只统计 `[一-鿿]` 中文字符）
+- **#184 续写滑窗**：原实现回传完整 user_msg + draft，多轮续写会再次溢出 max_tokens；现仅传 `_plan_anchor(章节计划锚点 ≤1500 字)` + 草稿尾部 `continuation_tail_chars` 字（默认 2000）+ "继续"指令
 - 日志输出格式：`Writer: chapter done. {中文字数} 中文字 / {总字符数} 字符。`
 
 ### 6.3 重写续写
 
 ```
-writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=min(base+0.15, 0.9))
-              → 检查 _count_chinese_chars(text) < words_min * 0.9 → chat_with_history 续写（同 rewrite_temp）
+writer.rewrite → _build_system_prompt(is_rewrite=True) → chat(temperature=min(base+0.25, 0.95))
+              → user_msg 中 running_context 截断到 rewrite_ctx_cap（默认 8000 字，#184，原 30000）
+              → 检查 _count_chinese_chars(text) < words_min * 0.9 → chat_with_history 同滑窗续写
 ```
 
 **说明**：`rewrite` 方法同样具备字数不足续写逻辑，与 `run` 方法一致。重写时因上下文精简（只传审稿意见+草稿，不重复传 running_context），续写时可能偏离原文风格。

@@ -36,6 +36,9 @@ class WriterAgent(BaseAgent):
     def __init__(self, llm, config: dict, ctx_mgr: ContextManager):
         super().__init__(llm, config)
         self.ctx_mgr = ctx_mgr
+        ctx_cfg = config.get("context_budget", {}) or {}
+        self.rewrite_ctx_cap = ctx_cfg.get("rewrite_ctx_cap", 8000)
+        self.continuation_tail_chars = ctx_cfg.get("continuation_tail_chars", 2000)
 
     def _build_system_prompt(self, words_min: int, words_max: int, style_guide: dict | None = None, is_rewrite: bool = False) -> str:
         tone = "根据设定风格"
@@ -77,14 +80,15 @@ class WriterAgent(BaseAgent):
         char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
             logger.info(f"Writer: text too short ({char_count} 中文字), requesting continuation...")
-            # 续写时截断原始 context，避免 running_context + draft 叠加溢出
-            context_for_continuation = user_msg[:40000] + ("\n...(上下文已截断)" if len(user_msg) > 40000 else "")
+            # 续写时只回传 plan 锚点 + 草稿尾部，避免再次叠加 running_context 溢出
+            plan_anchor = self._plan_anchor(chapter_plan)
+            tail = text[-self.continuation_tail_chars:] if len(text) > self.continuation_tail_chars else text
             continuation = self.llm.chat_with_history(
                 system,
                 [
-                    {"role": "user", "content": context_for_continuation},
-                    {"role": "assistant", "content": text},
-                    {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
+                    {"role": "user", "content": plan_anchor},
+                    {"role": "assistant", "content": tail},
+                    {"role": "user", "content": "请直接从上文结尾处继续写下去，不要重复已写内容，不要回顾前文："},
                 ],
                 temperature=self._temperature(),
                 max_tokens=None,
@@ -94,13 +98,29 @@ class WriterAgent(BaseAgent):
         logger.info(f"Writer: chapter done. {_count_chinese_chars(text)} 中文字 / {len(text)} 字符。")
         return text.strip()
 
+    @staticmethod
+    def _plan_anchor(chapter_plan: dict) -> str:
+        """续写时回传的最小锚点：章节标题 + 概要 + 关键剧情点，控制在 1.5K 字以内。"""
+        if not chapter_plan:
+            return "请继续撰写当前章节正文。"
+        lines = [f"章节：第{chapter_plan.get('chapter_number', '?')}章「{chapter_plan.get('title', '')}」"]
+        if chapter_plan.get("summary"):
+            lines.append(f"概要：{chapter_plan['summary']}")
+        plot_points = chapter_plan.get("plot_points") or []
+        if plot_points:
+            lines.append("剧情要点：")
+            for pp in plot_points[:5]:
+                lines.append(f"  - {pp}")
+        anchor = "\n".join(lines)
+        return anchor[:1500]
+
     def rewrite(self, draft: str, review_feedback: str, chapter_plan: dict, running_context: str, style_guide: dict | None = None, words_min: int | None = None, words_max: int | None = None) -> str:
         words_min, words_max = self._resolve_words(words_min, words_max)
         system = self._build_system_prompt(words_min, words_max, style_guide, is_rewrite=True)
 
-        # 重写时传入 chapter_plan + 精简 running_context，让 writer 知道这章该写什么
+        # 重写时只传精简上下文（rewrite_ctx_cap 默认 8000）：plan + 审稿意见 + 草稿足够
         plan_str = json.dumps(chapter_plan, ensure_ascii=False, indent=2) if chapter_plan else ""
-        ctx_cap = 30000
+        ctx_cap = self.rewrite_ctx_cap
         condensed_ctx = ""
         if running_context:
             condensed_ctx = running_context[:ctx_cap] + ("\n...(上下文已截断)" if len(running_context) > ctx_cap else "")
@@ -132,13 +152,14 @@ class WriterAgent(BaseAgent):
         char_count = _count_chinese_chars(text)
         if char_count < words_min * 0.9:
             logger.info(f"Writer: rewrite too short ({char_count} 中文字), requesting continuation...")
-            context_for_continuation = user_msg[:40000] + ("\n...(上下文已截断)" if len(user_msg) > 40000 else "")
+            plan_anchor = self._plan_anchor(chapter_plan)
+            tail = text[-self.continuation_tail_chars:] if len(text) > self.continuation_tail_chars else text
             continuation = self.llm.chat_with_history(
                 system,
                 [
-                    {"role": "user", "content": context_for_continuation},
-                    {"role": "assistant", "content": text},
-                    {"role": "user", "content": "请继续写，不要重复已写的内容，直接从上文结尾处继续："},
+                    {"role": "user", "content": plan_anchor},
+                    {"role": "assistant", "content": tail},
+                    {"role": "user", "content": "请直接从上文结尾处继续写下去，不要重复已写内容，不要回顾前文："},
                 ],
                 temperature=rewrite_temp,
                 max_tokens=None,

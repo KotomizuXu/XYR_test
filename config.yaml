@@ -11,8 +11,23 @@ novel:
   words_per_chapter:
     min: 3000
     max: 5000
-  review_max_retries: 3  # I2: review-rewrite 循环硬上限（≤3 轮重写，避免无限循环消耗 token）
+  review_max_retries: 2  # review-rewrite 循环硬上限（默认 2 轮已能覆盖 90% 修复场景，降低 token 消耗）
   summary_max_length: 800
+  volume_summary_max_length: 1200  # 卷级摘要字数上限（Level 3 宏观摘要）
+  volume_summary_min_chapters: 3   # 至少累计 N 章才生成卷级摘要
+
+# 上下文预算（防 max_tokens 截断）：单位字符数，中文 ≈ 1.5 token/字
+# 总预算 = api.max_tokens / 1.5 ≈ 87000 字（GLM-5.1 131K window）
+context_budget:
+  reserved_output_chars: 9000      # 章节输出预留（5000 字正文 + 续写余地）
+  writer_system_chars: 40000       # Writer system prompt 上限（含 constitution + style）
+  running_context_chars: 50000     # build_running_context 总预算（user 侧）
+  tracking_context_chars: 8000     # tracker.get_tracking_context 输出上限
+  rewrite_ctx_cap: 8000            # writer.rewrite 时传入的精简上下文上限
+  continuation_tail_chars: 2000    # _continue_text 续写时只回传草稿尾部 N 字
+  recent_chapters_full: 3          # Tier 1：最近 N 章原文片段
+  recent_chapters_condensed: 7     # Tier 2：再向前 N 章一句话摘要
+  foreshadowing_top_k: 8           # 检索注入的相关伏笔/锚点数量
 
 agents:
   style_advisor:

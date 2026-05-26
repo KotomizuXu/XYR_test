@@ -15,6 +15,19 @@ SUMMARY_PROMPT = """请为以下小说章节生成一份简洁的摘要，包含
 章节内容：
 {chapter_text}"""
 
+VOLUME_SUMMARY_PROMPT = """请为以下小说一卷的内容生成卷级宏观摘要，用于让后续章节作者了解长程结构。
+
+要求：
+1. 提取本卷的主线推进（不超过 3 个核心节点）
+2. 关键人物变化与关系演进
+3. 已埋设但未回收的伏笔，已收束的伏笔状态
+4. 保留原文中标志性的意象、术语和情绪定调（直接引用，不要重述）
+
+字数控制在 {max_length} 字以内。不要重写场景细节，只串联结构。
+
+本卷章节摘要列表：
+{chapter_summaries}"""
+
 CONTEXT_TEMPLATE = """## 用户原始需求
 {story_idea}
 
@@ -48,15 +61,21 @@ FULL_CONTEXT_TEMPLATE = """## 用户原始需求
 ## 当前章节剧情要点
 {current_plan}"""
 
-# Rough char budget: leave room for output within 128K context
-# Chinese ~1.5 token/char on average
-MAX_CONTEXT_CHARS = 80000
+# 默认上下文字符预算（运行时会被 config.context_budget.running_context_chars 覆盖）
+DEFAULT_MAX_CONTEXT_CHARS = 60000
 
 
 class ContextManager:
     def __init__(self, llm_client, config: dict):
         self.llm = llm_client
         self.max_summary_length = config["novel"]["summary_max_length"]
+        ctx_cfg = config.get("context_budget", {}) or {}
+        self.max_context_chars = ctx_cfg.get("running_context_chars", DEFAULT_MAX_CONTEXT_CHARS)
+        self.tracking_max_chars = ctx_cfg.get("tracking_context_chars", 8000)
+        self.recent_chapters_full = ctx_cfg.get("recent_chapters_full", 3)
+        self.recent_chapters_condensed = ctx_cfg.get("recent_chapters_condensed", 7)
+        self.volume_summary_max_length = config.get("novel", {}).get("volume_summary_max_length", 1200)
+        self.volume_summary_min_chapters = config.get("novel", {}).get("volume_summary_min_chapters", 3)
 
     def generate_chapter_summary(self, chapter_text: str, chapter_number: int) -> str:
         # 取首尾各3000字，保留章节开头和结尾的关键信息
@@ -73,6 +92,32 @@ class ContextManager:
         logger.info(f"Generated summary for chapter {chapter_number}: {summary[:100]}...")
         return summary.strip()
 
+    def generate_volume_summary(self, volume_number: int, volume_title: str,
+                                chapter_summaries: list[str], style_guide: dict | None = None) -> str:
+        """生成卷级宏观摘要（Level 3）。
+
+        Why: 300 章场景下章节摘要 240K 字，必须再做一层聚合。卷级摘要保留长程结构（伏笔/弧线）
+        与原作笔触，给 Writer 远端记忆。
+        How to apply: pipeline 在卷末（advance_volume 时）调用一次，结果存入 state。
+        """
+        if not chapter_summaries:
+            return ""
+        summaries_text = "\n\n".join(f"第{i}章：{s}" for i, s in enumerate(chapter_summaries, 1))
+        prompt = VOLUME_SUMMARY_PROMPT.format(
+            max_length=self.volume_summary_max_length,
+            chapter_summaries=summaries_text,
+        )
+        # 沿用风格指南中的 tone，保证卷摘要语言基调与正文一致
+        tone = ""
+        if style_guide:
+            tone = (style_guide.get("tone", {}) or {}).get("overall", "")
+        system = (
+            f"你是一个小说编辑助手，正在为第{volume_number}卷「{volume_title}」生成卷级宏观摘要。"
+            + (f"\n保持基调：{tone}" if tone else "")
+        )
+        summary = self.llm.chat(system, prompt, temperature=0.3)
+        return summary.strip()
+
     def build_running_context(
         self,
         world_data: dict | None,
@@ -82,12 +127,36 @@ class ContextManager:
         tracking_context: str = "",
         story_idea: str = "",
         volumes: list | None = None,
+        volume_summaries: dict | None = None,
+        recent_chapter_excerpts: list[str] | None = None,
+        relevant_anchors: str = "",
     ) -> str:
+        """构建 Writer 的 running context。
+
+        三级金字塔记忆：
+        - Level 1：recent_chapter_excerpts（最近章节原文片段，保近端文风）
+        - Level 2：completed_summaries 中按章号配 Tier1/Tier2 滑窗（中程节奏）
+        - Level 3：volume_summaries（远端卷级结构）
+        - 锚点：relevant_anchors（按本章计划检索的伏笔/角色）
+        """
         world_ref = self._condense_world(world_data)
         outline_ref = self._condense_outline(outline)
-        summaries_text = self._format_summaries(completed_summaries)
         current_plan = self._format_chapter_plan(current_chapter_plan)
         idea_text = story_idea.replace("\n", " ")[:1000] if story_idea else "（无）"
+
+        # tracking_context 二次截断（防御性，调用方应已传截断版）
+        if tracking_context and len(tracking_context) > self.tracking_max_chars:
+            tracking_context = tracking_context[:self.tracking_max_chars] + "\n...(追踪数据已截断)"
+
+        # 组装多层摘要文本
+        summaries_text = self._build_layered_summaries(
+            completed_summaries,
+            volume_summaries or {},
+            current_chapter_plan.get("chapter_number", 0),
+            volumes,
+            recent_chapter_excerpts,
+            relevant_anchors,
+        )
 
         volume_info = self._format_volume_info(volumes, current_chapter_plan.get("chapter_number", 0))
 
@@ -112,72 +181,101 @@ class ContextManager:
         if volume_info:
             result = volume_info + "\n\n" + result
 
-        # Truncate if context exceeds budget
-        if len(result) > MAX_CONTEXT_CHARS:
-            logger.warning(f"Context too long ({len(result)} chars), truncating summaries")
-            result = self._truncate_context(result, completed_summaries, world_ref, outline_ref, tracking_context, current_chapter_plan, story_idea)
+        # 总预算兜底截断（不应触发，触发说明上层未做好分配）
+        if len(result) > self.max_context_chars:
+            logger.warning(f"Context still too long ({len(result)} > {self.max_context_chars}) after layering, hard-truncate")
+            result = self._hard_truncate(result, world_ref, outline_ref, tracking_context, current_chapter_plan, story_idea)
 
         return result
 
-    def _truncate_context(self, result: str, summaries: list[str], world_ref: str, outline_ref: str, tracking_context: str, current_plan: dict, story_idea: str = "") -> str:
-        # Cap tracking context to prevent it from consuming entire budget
-        if len(tracking_context) > 10000:
-            tracking_context = tracking_context[:10000] + "\n...(追踪数据已截断)"
+    def _build_layered_summaries(
+        self,
+        summaries: list[str],
+        volume_summaries: dict,
+        current_chapter: int,
+        volumes: list | None,
+        recent_excerpts: list[str] | None,
+        relevant_anchors: str,
+    ) -> str:
+        """组装三级金字塔摘要文本。
 
-        # Tiered compression: keep last 3 full, compress 4-10, drop oldest
+        分级策略：
+        - Level 3：历史卷的卷级摘要（除当前卷外的所有已完成卷）
+        - Level 2 Tier1：最近 recent_chapters_full 章的完整摘要
+        - Level 2 Tier2：再向前 recent_chapters_condensed 章的一句话摘要
+        - Level 1：最近章节的原文片段（如果传入）
+        - 锚点：相关伏笔/角色（query_relevant 输出）
+        """
+        if not summaries and not volume_summaries and not recent_excerpts:
+            return "（这是第一章）"
+
+        sections = []
         total = len(summaries)
-        fixed_len = len(world_ref) + len(outline_ref) + len(tracking_context) + 500
-        budget = MAX_CONTEXT_CHARS - fixed_len
 
-        # Track how many were originally included before truncation
-        tier2_count = min(max(0, total - 3), 7)  # max 7 condensed
-        tier1_count = min(3, total)
-        originally_included = tier1_count + tier2_count
+        # Level 3：历史卷摘要
+        if volume_summaries:
+            current_vol_num = self._find_volume_number(volumes, current_chapter)
+            l3_lines = []
+            for vol_num in sorted(volume_summaries.keys()):
+                if current_vol_num and vol_num >= current_vol_num:
+                    continue  # 跳过当前及之后的卷
+                l3_lines.append(f"### 第{vol_num}卷宏观摘要\n{volume_summaries[vol_num]}")
+            if l3_lines:
+                sections.append("## 历史卷宏观结构（远端记忆）\n" + "\n\n".join(l3_lines))
 
-        kept_lines = []
+        # Level 2 Tier2：condensed 一句话摘要
+        full_n = self.recent_chapters_full
+        condensed_n = self.recent_chapters_condensed
+        tier2 = summaries[max(0, total - full_n - condensed_n): max(0, total - full_n)]
+        tier2_start = max(0, total - full_n - condensed_n) + 1
+        if tier2:
+            t2_lines = []
+            dropped = total - len(tier2) - min(full_n, total)
+            if dropped > 0:
+                t2_lines.append(f"（更早 {dropped} 章已聚合至卷级摘要）")
+            for idx, s in enumerate(tier2, tier2_start):
+                short = s[:100] + "…" if len(s) > 100 else s
+                t2_lines.append(f"第{idx}章（简）：{short}")
+            sections.append("## 中程章节梗概\n" + "\n".join(t2_lines))
 
-        # Tier 2: chapters 4-10 from end — one-sentence condensed (drop first)
-        tier2 = summaries[max(0, total - 10): max(0, total - 3)]
-        tier2_start = max(0, total - 10) + 1
-        for idx, s in enumerate(tier2, tier2_start):
-            short = s[:100] + "…" if len(s) > 100 else s
-            kept_lines.append(f"第{idx}章（简）：{short}")
-
-        # Tier 1: last 3 chapters — full summary
-        tier1 = summaries[-3:] if total >= 3 else summaries
+        # Level 2 Tier1：full 摘要
+        tier1 = summaries[-full_n:] if total >= full_n else summaries
         tier1_start = total - len(tier1) + 1
-        for idx, s in enumerate(tier1, tier1_start):
-            kept_lines.append(f"第{idx}章摘要：{s}")
+        if tier1:
+            t1_lines = [f"第{idx}章摘要：{s}" for idx, s in enumerate(tier1, tier1_start)]
+            sections.append("## 最近章节摘要\n" + "\n\n".join(t1_lines))
 
-        # Check budget; pop(0) removes tier2 (older) first, protecting tier1 (newest)
-        while kept_lines and sum(len(l) for l in kept_lines) + fixed_len > MAX_CONTEXT_CHARS:
-            kept_lines.pop(0)
+        # Level 1：原文片段
+        if recent_excerpts:
+            l1_lines = []
+            excerpt_start = current_chapter - len(recent_excerpts)
+            for i, ex in enumerate(recent_excerpts):
+                ch_num = excerpt_start + i
+                l1_lines.append(f"### 第{ch_num}章近端片段\n{ex}")
+            sections.append("## 近端原文片段（保持文风延续）\n" + "\n\n".join(l1_lines))
 
-        kept_count = len(kept_lines)
-        dropped = originally_included - kept_count
-        if dropped > 0:
-            kept_lines.insert(0, f"（前{dropped}章摘要已省略）")
+        # 检索锚点
+        if relevant_anchors:
+            sections.append(relevant_anchors)
 
-        summaries_text = "\n\n".join(kept_lines)
-        current_plan_text = self._format_chapter_plan(current_plan)
-        idea_text = story_idea.replace("\n", " ")[:1000] if story_idea else "（无）"
+        return "\n\n".join(sections) if sections else "（这是第一章）"
 
-        if tracking_context:
-            return FULL_CONTEXT_TEMPLATE.format(
-                story_idea=idea_text,
-                world_ref=world_ref,
-                outline_ref=outline_ref,
-                summaries=summaries_text,
-                tracking_context=tracking_context,
-                current_plan=current_plan_text,
-            )
-        return CONTEXT_TEMPLATE.format(
-            story_idea=idea_text,
-            world_ref=world_ref,
-            outline_ref=outline_ref,
-            summaries=summaries_text,
-            current_plan=current_plan_text,
-        )
+    def _find_volume_number(self, volumes: list | None, chapter_number: int) -> int | None:
+        if not volumes or not chapter_number:
+            return None
+        for vol in volumes:
+            if vol.start_chapter <= chapter_number <= vol.end_chapter:
+                return vol.number
+        return None
+
+    def _hard_truncate(self, result: str, world_ref: str, outline_ref: str,
+                       tracking_context: str, current_plan: dict, story_idea: str = "") -> str:
+        """超预算时硬截断：丢弃 summaries 后半段。"""
+        cap = self.max_context_chars
+        if len(result) <= cap:
+            return result
+        # 简单按字符截断尾部，加截断标记
+        return result[:cap] + "\n\n...(上下文过长已强制截断，请压缩 summaries)"
 
     def _format_volume_info(self, volumes: list | None, chapter_number: int) -> str:
         if not volumes or not chapter_number:

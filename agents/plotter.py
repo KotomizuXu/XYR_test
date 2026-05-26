@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 
 import anthropic
@@ -16,6 +17,17 @@ BATCH_SIZE = 5
 MAX_SUMMARY_FULL = 30   # 最近 N 条完整摘要
 MAX_SUMMARY_SHORT = 50  # 更早的最多保留 N 条
 BATCH_MAX_RETRIES = 3   # 单批次最大重试次数
+EXISTING_SUMMARIES_CHAR_CAP = 20000  # 已规划摘要拼接上限（300 章累计可达 50K+，会挤爆 token）
+
+# 章节标题前缀清洗：剥离 LLM 自加的"第N卷/卷X/第N幕/Volume N"等前缀。
+# 注意：故意不清"第N章"——剧情元素可能含"第三章隔间"这类合法 title。
+_TITLE_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"第[一二三四五六七八九十百零\d]+[卷幕部]"            # 第二卷 / 第三幕 / 第一部
+    r"|卷[一二三四五六七八九十\d]+"                       # 卷二
+    r"|[Vv]ol(?:ume)?[\s\.]*\d+"                           # Vol.2 / Volume 3
+    r")[\s·:：、\-—,，]*"
+)
 
 
 class PlotAgent(BaseAgent):
@@ -111,6 +123,8 @@ class PlotAgent(BaseAgent):
                     raise ValueError(f"Plotter returned unexpected format: {type(result)}")
                 for i, plan in enumerate(result):
                     plan.setdefault("chapter_number", start + i)
+                    if plan.get("title"):
+                        plan["title"] = self._sanitize_title(plan["title"])
                 return result
             except anthropic.APIStatusError as e:
                 if attempt < BATCH_MAX_RETRIES - 1:
@@ -134,6 +148,19 @@ class PlotAgent(BaseAgent):
                     time.sleep(wait)
                 else:
                     raise
+
+    @staticmethod
+    def _sanitize_title(title: str) -> str:
+        """剥离 LLM 自加的'第N卷'/'卷X'/'第N幕'/'Volume N' 等卷幕前缀。
+
+        Why: title 字段只该写本章主题词组；卷/幕归属由 act 字段和 state.volumes 表达。
+        LLM 偶发把卷名拼进 title（如'第二卷：虚假生路 - 沉溺'），导致前端 '第N章 {title}'
+        渲染时出现重复卷名。
+        """
+        if not isinstance(title, str):
+            return title
+        cleaned = _TITLE_PREFIX_RE.sub("", title).strip()
+        return cleaned or title
 
     @staticmethod
     def _build_batch_prompt(
@@ -202,4 +229,4 @@ class PlotAgent(BaseAgent):
         return (
             "\n\n## 已规划的章节摘要（请保持连贯）\n"
             + "\n".join(f"- {l}" for l in lines)
-        )
+        )[:EXISTING_SUMMARIES_CHAR_CAP]

@@ -404,6 +404,7 @@ class NovelPipeline:
     def _collect_volume_definitions(self, total_chapters: int, story_idea: str) -> list:
         """通过 LLM 建议分卷方案，用户确认/调整后返回 VolumeDef 列表。"""
         from core.state_manager import VolumeDef
+        import re
         ui.section("分卷规划", style="cyan")
         ui.info(f"共 {total_chapters} 章，正在生成分卷建议...")
 
@@ -412,19 +413,27 @@ class NovelPipeline:
             f"总章节数：{total_chapters}\n\n"
             f"请为这部小说设计分卷方案。每卷应有独立的叙事焦点和情感弧线。"
             f"卷的划分应基于故事的自然节奏（如地点转换、时间跳跃、阶段性的冲突与解决）。\n\n"
-            f"输出 JSON 数组：[{{\"title\": \"卷名\", \"chapters\": \"起始章-结束章（如 1-8）\", \"reason\": \"分卷理由\"}}]\n"
-            f"每卷建议 8-15 章。只输出 JSON，不要额外文字。"
+            f"输出 JSON 数组，按卷顺序排列：[{{\"title\": \"卷名（不要含'第N卷'前缀，只写卷名本身）\", "
+            f"\"chapters\": \"起始章-结束章（如 1-8）\", \"reason\": \"分卷理由\"}}]\n"
+            f"硬性要求：\n"
+            f"1. 第一卷必须从第 1 章开始\n"
+            f"2. 最后一卷必须以第 {total_chapters} 章结束\n"
+            f"3. 卷与卷之间章节范围连续不重叠（如 [1-8, 9-16, 17-25]）\n"
+            f"4. title 只写卷名本身（如\"觉醒\"），不要加\"第二卷\"\"卷二\"等前缀，前端会自动加卷号\n"
+            f"5. 每卷建议 8-15 章\n"
+            f"只输出 JSON，不要额外文字。"
         )
         result = self.llm.chat_json("你是一位小说结构规划师。", suggest_prompt, temperature=0.7)
-        if not isinstance(result, list):
+        if not isinstance(result, list) or not result:
             ui.warn("分卷建议格式异常，跳过分卷")
             return None
 
-        # 解析建议并展示
+        # 解析并清洗 title（去除 LLM 自加的"第N卷"前缀）
+        _PREFIX_RE = re.compile(r"^(第[一二三四五六七八九十百零\d]+[卷部章]|卷[一二三四五六七八九十\d]+)[\s·:：、\-]*")
         suggestions = []
-        ch_cursor = 1
         for i, item in enumerate(result, 1):
-            title = item.get("title", f"卷{i}")
+            raw_title = (item.get("title") or f"卷{i}").strip()
+            title = _PREFIX_RE.sub("", raw_title).strip() or f"卷{i}"
             chapters_str = item.get("chapters", "")
             reason = item.get("reason", "")
             try:
@@ -432,14 +441,15 @@ class NovelPipeline:
                 start = int(parts[0].strip())
                 end = int(parts[1].strip())
             except (ValueError, IndexError):
-                start = ch_cursor
-                end = min(ch_cursor + total_chapters // len(result) - 1, total_chapters)
+                start = None
+                end = None
             suggestions.append({"number": i, "title": title, "start": start, "end": end, "reason": reason})
-            ch_cursor = end + 1
 
-        # 确保覆盖全部章节
-        if suggestions:
-            suggestions[-1]["end"] = max(suggestions[-1]["end"], total_chapters)
+        # 校验/修复 chapters 范围：必须从 1 起、严格递增、最后一卷到 total
+        suggestions = self._normalize_volume_ranges(suggestions, total_chapters)
+        if not suggestions:
+            ui.warn("分卷范围异常无法修复，跳过分卷")
+            return None
 
         ui.info("分卷建议：")
         for s in suggestions:
@@ -456,6 +466,56 @@ class NovelPipeline:
             return None
 
         return [VolumeDef(s["number"], s["title"], s["start"], s["end"]) for s in suggestions]
+
+    @staticmethod
+    def _normalize_volume_ranges(suggestions: list[dict], total_chapters: int) -> list[dict]:
+        """校验并修复 LLM 给的分卷范围，确保从第 1 章起、连续、覆盖 total_chapters。
+
+        Why: LLM 偶发输出范围有空洞（如 [11-15, 16-25]，丢失 1-10）或重叠 / 末尾
+        不到 total，导致前端按 start_chapter 过滤章节时部分章节归不到任何卷，看起来
+        像"缺第一卷"或"两个第二卷"。
+        """
+        if not suggestions:
+            return suggestions
+        # 按 start 排序（空值放最后）
+        sortable = [s for s in suggestions if s.get("start") is not None]
+        sortable.sort(key=lambda s: s["start"])
+        unsortable = [s for s in suggestions if s.get("start") is None]
+        # 给空范围的 item 平均分配剩余区间
+        ordered = sortable + unsortable
+
+        # 重建连续区间：从 1 开始顺次铺到 total
+        n = len(ordered)
+        if n == 0:
+            return []
+        avg = max(1, total_chapters // n)
+        cursor = 1
+        fixed = []
+        for idx, s in enumerate(ordered):
+            number = idx + 1
+            # 强制 start = cursor，end 取 LLM 给的或平均长度
+            llm_end = s.get("end")
+            if llm_end is None or llm_end <= cursor:
+                end = min(cursor + avg - 1, total_chapters)
+            else:
+                end = min(llm_end, total_chapters)
+            # 最后一卷强制到 total
+            if idx == n - 1:
+                end = total_chapters
+            if end < cursor:
+                end = cursor
+            fixed.append({
+                "number": number,
+                "title": s["title"],
+                "start": cursor,
+                "end": end,
+                "reason": s.get("reason", ""),
+            })
+            cursor = end + 1
+            if cursor > total_chapters and idx < n - 1:
+                # 区间已用完但还有卷没分配 → 丢弃多余卷
+                break
+        return fixed
 
     # ── Incremental Directing (Phase 1) ──────────────────────────────────
 
@@ -1017,6 +1077,21 @@ class NovelPipeline:
                     if new_result is None:
                         ui.warn("打磨失败，保留当前版本")
                         continue
+                    # 调整后如果与原版几乎一致，自动升温重试一次（避免"调整无变化"）
+                    if self._refine_too_similar(result, new_result):
+                        ui.warn(f"检测到「{label}」调整后变化过小，自动升温重试...")
+                        retry = self._llm_refine(
+                            system_prompt,
+                            label=label,
+                            current=result,
+                            user_feedback=action + "\n\n（上一次调整后输出几乎未变，请彻底重写涉及部分，与原版表述明显不同）",
+                            context=context_summary,
+                            force_rewrite=True,
+                        )
+                        if retry is not None:
+                            new_result = retry
+                            if self._refine_too_similar(result, new_result):
+                                ui.warn(f"AI 仍未给出明显不同的版本，保留当前结果（可选'重写'换方向）")
                     result = new_result
                     if on_update:
                         on_update(result)
@@ -1065,9 +1140,11 @@ class NovelPipeline:
 
     def _llm_refine(self, system_prompt: str, *, label: str,
                     current, user_feedback: str | None, context: str,
-                    rewrite: bool = False, previous=None):
+                    rewrite: bool = False, previous=None,
+                    force_rewrite: bool = False):
         """根据 user_feedback 调整 current；
         rewrite=True 时整块重生成（previous 作为反上下文，升温 0.9）。
+        force_rewrite=True 时在 adjust 路径上加"换措辞/换节奏"约束并升温（用于自动升温重试）。
 
         返回 dict / list（成功）或 None（解析失败）。
         """
@@ -1089,19 +1166,38 @@ class NovelPipeline:
             sys_msg = system_prompt
             temperature = 0.7
         else:
+            extra = ""
+            if force_rewrite:
+                extra = (
+                    "\n\n注意：必须**实质性**修改，输出与当前版本明显不同；只换同义词或调标点会被判定为失败。"
+                )
             user_msg = (
                 f"## 上下文\n{context}\n\n"
                 f"## 当前版本\n{json.dumps(current, ensure_ascii=False, indent=2)}\n\n"
-                f"## 用户反馈\n{user_feedback}\n\n"
+                f"## 用户反馈\n{user_feedback}{extra}\n\n"
                 f"请根据反馈调整「{label}」，输出完整修订后的 JSON（结构与当前版本一致）。"
             )
             sys_msg = system_prompt
-            temperature = 0.7
+            temperature = 0.9 if force_rewrite else 0.7
         try:
             return self.llm.chat_json(sys_msg, user_msg, temperature=temperature)
         except Exception as e:
             logger.warning(f"_llm_refine failed for {label}: {e}")
             return None
+
+    @staticmethod
+    def _refine_too_similar(old, new, threshold: float = 0.92) -> bool:
+        """判定两版 refine 结果是否高度相似（用于"调整无变化"防御）。"""
+        if old is None or new is None:
+            return False
+        try:
+            old_s = json.dumps(old, ensure_ascii=False, sort_keys=True)
+            new_s = json.dumps(new, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            old_s, new_s = str(old), str(new)
+        if not old_s or not new_s:
+            return False
+        return SequenceMatcher(None, old_s, new_s).ratio() >= threshold
 
     def _get_words_range(self, state: NovelState) -> tuple[int, int]:
         if state.novel_params and "words_per_chapter" in state.novel_params:
@@ -1247,7 +1343,10 @@ class NovelPipeline:
             self._pre_write_check(state, tracker)
 
             # Pre-write checklist: build full context with tracking data
-            tracking_ctx = tracker.get_tracking_context(ch_num)
+            tracking_ctx = tracker.get_tracking_context(
+                ch_num,
+                max_chars=self.config.get("context_budget", {}).get("tracking_context_chars", 8000),
+            )
 
             # Check forgotten elements
             forgotten = tracker.check_forgotten(ch_num)
@@ -1262,10 +1361,18 @@ class NovelPipeline:
 
             # Build running context
             completed_summaries = [c.summary for c in state.chapters[:i] if c.summary]
+            recent_excerpts = self._collect_recent_excerpts(state, i)
+            relevant_anchors = tracker.query_relevant(
+                plan, ch_num,
+                top_k=self.config.get("context_budget", {}).get("foreshadowing_top_k", 8),
+            )
             running_ctx = self.ctx_mgr.build_running_context(
                 state.world_data, state.outline, completed_summaries, plan,
                 tracking_context=tracking_ctx, story_idea=state.story_idea,
                 volumes=state.volumes,
+                volume_summaries=state.volume_summaries,
+                recent_chapter_excerpts=recent_excerpts,
+                relevant_anchors=relevant_anchors,
             )
 
             # ──────────── Stage 1: Writer draft（可跳过：已有 drafted 标记 + 文件存在）────────────
@@ -1463,6 +1570,7 @@ class NovelPipeline:
                 # Volume boundary check
                 if state.volumes:
                     tracker.advance_volume(ch_num, state.volumes)
+                    self._maybe_generate_volume_summary(state, ch_num)
                 self.state_mgr.save(state)
             else:
                 ui.hint(f"[恢复] 跳过追踪更新，复用已存在数据（stage=tracked）")
@@ -1494,7 +1602,10 @@ class NovelPipeline:
             draft = draft_path.read_text(encoding="utf-8")
 
             # Get tracking context for consistency during editing
-            tracking_ctx = tracker.get_tracking_context(ch_num)
+            tracking_ctx = tracker.get_tracking_context(
+                ch_num,
+                max_chars=self.config.get("context_budget", {}).get("tracking_context_chars", 8000),
+            )
 
             # Get adjacent chapters for transition context
             prev_ending, next_opening = self._get_adjacent_text(state, ch_num)
@@ -1877,3 +1988,70 @@ class NovelPipeline:
             if ch.chapter_number == chapter_number:
                 return ch
         return None
+
+    def _collect_recent_excerpts(self, state: NovelState, current_index: int, max_chars_per_ch: int = 1500) -> list[str]:
+        """收集最近 N 章原文片段（Level 1 近端记忆），用于让 Writer 感知文风延续。
+
+        Why: 单靠摘要会让 Writer 漂移到通用网文腔。原文片段保留原作笔触、人物口吻、意象。
+        How to apply: 取每章首尾各 750 字（max_chars_per_ch=1500），合并段落断裂处。
+        """
+        n = self.ctx_mgr.recent_chapters_full
+        excerpts: list[str] = []
+        start = max(0, current_index - n)
+        for j in range(start, current_index):
+            ch = state.chapters[j]
+            path = None
+            for p in (ch.edited_path, ch.draft_path):
+                if p and Path(p).exists():
+                    path = Path(p)
+                    break
+            if not path:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if len(text) <= max_chars_per_ch:
+                excerpts.append(text)
+            else:
+                half = max_chars_per_ch // 2
+                excerpts.append(text[:half] + "\n…(中略)…\n" + text[-half:])
+        return excerpts
+
+    def _maybe_generate_volume_summary(self, state: NovelState, ch_num: int) -> None:
+        """如果 ch_num 是某卷最后一章，生成该卷的 Level 3 卷级摘要并存入 state。
+
+        Why: 卷级摘要是 300 章场景的长程记忆，避免章节摘要线性堆积爆 token。
+        How to apply: 仅在 advance_volume 触发卷切换时调用一次；存量 state 可补生成。
+        """
+        if not state.volumes:
+            return
+        # 找到 ch_num 所在卷
+        cur_vol = None
+        for vol in state.volumes:
+            if vol.start_chapter <= ch_num <= vol.end_chapter:
+                cur_vol = vol
+                break
+        if not cur_vol or ch_num != cur_vol.end_chapter:
+            return  # 只在卷末触发
+        if state.volume_summaries is None:
+            state.volume_summaries = {}
+        if cur_vol.number in state.volume_summaries:
+            return  # 已生成
+        # 收集本卷所有章节摘要
+        vol_chapter_summaries = [
+            c.summary for c in state.chapters
+            if cur_vol.start_chapter <= c.chapter_number <= cur_vol.end_chapter and c.summary
+        ]
+        if len(vol_chapter_summaries) < self.ctx_mgr.volume_summary_min_chapters:
+            return
+        ui.info(f"[卷摘要] 生成第{cur_vol.number}卷「{cur_vol.title}」宏观摘要...")
+        try:
+            vs = self.ctx_mgr.generate_volume_summary(
+                cur_vol.number, cur_vol.title, vol_chapter_summaries, state.style_guide,
+            )
+            if vs:
+                state.volume_summaries[cur_vol.number] = vs
+                ui.success(f"[卷摘要] 第{cur_vol.number}卷宏观摘要已生成（{len(vs)} 字）")
+        except Exception as e:
+            logger.warning(f"Volume summary generation failed for vol {cur_vol.number}: {e}")
