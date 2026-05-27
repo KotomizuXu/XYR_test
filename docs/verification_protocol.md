@@ -859,6 +859,48 @@
 
 ---
 
+**K15. LLM 调用失败降级路径安全性**
+
+检查目标：pipeline 中 `try/except Exception` 捕获 LLM 异常后走降级时，state 是否保持一致，不会留下半完成状态导致断点续写出错。
+
+检查方法：
+1. 在 `_write_chapters` 中确认：Writer/Reviewer/Editor 调用失败后，`ch.stage` 是否停留在失败前的阶段（drafted/reviewed/pending），而非被错误地推进到下一阶段
+2. 确认 `_PhaseHandledError` 触发时 `state.current_chapter` 和 `state.phase` 是否正确反映已完成的进度
+3. 确认 `_run_pipeline` 顶层 `try/except` 在异常时调用 `state_mgr.save(state)` 保存进度
+4. 确认 Plotter 批次失败时 `state.chapter_plans` 保留已完成批次的成果（`_save_plotting_progress`）
+
+通过条件：异常路径不会推进 stage/phase；已完成的章节数据不会丢失；断点续写能从正确位置恢复
+
+---
+
+**K16. 并发会话数据隔离**
+
+检查目标：多个 WebSocket 会话并发时，`threading.local()` 是否正确隔离各会话的 `input_queue` / `output_queue` / `cancelled` Event。
+
+检查方法：
+1. 确认 `core/prompt_utils.py` 的 `set_current_session` / `get_current_session` 使用 `threading.local()` 而非全局变量
+2. 确认 `web/app.py` 中每个 WebSocket 连接创建独立的 `BridgeSession` 实例
+3. 确认 pipeline 在 daemon 线程中运行时，`get_current_session()` 返回的是当前线程绑定的会话
+4. 确认 `session.cancelled.is_set()` 在一个会话取消时不会影响其他会话的阻塞等待
+
+通过条件：各会话的输入/输出/取消状态完全隔离，不会串消息或误取消
+
+---
+
+**K17. Context 截断完整性**
+
+检查目标：`context_manager.build_running_context` 和 `tracker.get_tracking_context` 的 `max_chars` 截断不会破坏关键上下文结构。
+
+检查方法：
+1. 确认 `_hard_truncate` 截断时在最近的 `## ` 标题处截断（不切断段落中间），或至少在换行符处截断
+2. 确认 `get_tracking_context` 的各输出块（角色状态/时间线/伏笔/关系/地点）独立截断，不会因为一个块过长导致后续块完全不输出
+3. 确认截断后日志输出 warn 信息，包含截断前后的字符数
+4. 确认 `build_running_context` 超出 `max_context_chars` 时 warn 日志触发
+
+通过条件：截断发生在合理的边界处；不会丢失所有追踪信息；有日志可排查
+
+---
+
 ## 三、验证报告输出格式
 
 每次执行后，按以下格式输出报告：
@@ -906,7 +948,7 @@
 | 新增或修改 config 参数 | `docs/parameters_and_changelog.md` 对应配置表 | 更新参数行 |
 | 新增 Agent 或 Phase | `README.md` 架构图 + 核心特性 | 同步更新 |
 | 新增或升级依赖 | `requirements.txt` + `README.md` 环境要求 | 同步更新 |
-| 新增或修改 Web 桥接函数 | `web/bridge/__init__.py` + `docs/system_reference.md` 第21章 | 同步 monkey-patch 列表和 WebSocket 协议文档 |
+| 新增或修改 Web 桥接函数 | `web/bridge/` + `docs/system_reference.md` 第21章 | 同步 WebSocket 协议文档和会话管理变更 |
 | 新增或修改 WebSocket 消息类型 | 前端 `MessageLog.vue` / `InputDispatcher.vue` + `docs/system_reference.md` 第21章 | 前后端同时添加对应渲染/处理逻辑 |
 | 新增或修改 REST API 端点 | `web/routers/novels.py` + 前端 `useNovelApi.ts` | 接口契约前后端同步 |
 | 发现验证协议覆盖盲区 | `docs/verification_protocol.md` | 补充或修正验证项（J1 触发） |
@@ -916,5 +958,5 @@
 
 ---
 
-*最后验证执行时间：2026-05-26（#184-#188 治理 + K8 重构 + K10-K14 补充）*
-*协议版本：1.10*
+*最后验证执行时间：2026-05-27（全面自检 + K15-K17 盲区补充）*
+*协议版本：1.11*

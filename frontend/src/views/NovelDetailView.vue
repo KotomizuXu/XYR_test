@@ -138,13 +138,6 @@ async function rollbackToPhase(targetPhase: string) {
   }
 }
 
-const ROLLBACK_TARGETS: Record<string, string> = {
-  collecting_params: 'collecting_params',
-  directing: 'directing',
-  plotting: 'plotting',
-  writing: 'writing',
-}
-
 const TENSION_MAP: Record<string, { label: string; type: 'error' | 'warning' | 'info' }> = {
   high: { label: '高', type: 'error' },
   medium: { label: '中', type: 'warning' },

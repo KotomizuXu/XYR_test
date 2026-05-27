@@ -1145,7 +1145,7 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 
 ## 二十一、Web 架构
 
-> *最后验证：2026-05-23（#170 移除 CLI）*
+> *最后验证：2026-05-27（#170 移除 CLI + 全面自检确认 web-native）*
 
 ### 21.1 Web-only 架构
 
@@ -1153,15 +1153,16 @@ UserAbort 在 `_confirm_refine` 中视为 "yes"（保留当前版本继续往下
 |------|------|--------|---------|
 | Web | `python3 web_main.py` | `core/prompt_utils` + `core/ui`（WebSocket 原生） | 浏览器访问 http://localhost:8000 |
 
-`core/prompt_utils.py` 和 `core/ui.py` 直接通过 WebSocket 与前端通信，无需桥接层。
+`core/prompt_utils.py` 和 `core/ui.py` 直接通过 WebSocket 与前端通信，无需桥接层。`web/bridge/__init__.py` 不再包含 monkey-patch 逻辑（已在 #170 移除 CLI 时重构为 web-native）。
 
 ### 21.2 通信机制
 
-`core/prompt_utils.py` 通过 `threading.local()` 绑定当前线程的 `BridgeSession`：
+`core/prompt_utils.py` 是 web-native 实现，通过 `threading.local()` 绑定当前线程的 `BridgeSession`（定义在 `web/bridge/session.py`）：
 
 - `prompt_choice` → 构造 `input_request` 消息 → 放入 `session.output_queue` → 阻塞等 `session.input_queue` 响应
 - `ui.info` → 构造 `output` 消息 → 放入 `session.output_queue` → 不阻塞
 - `LLMClient.Spinner` → 空操作（进度由 Web 层管理）
+- `web/bridge/web_prompt.py` 仅提供 `get_current_session` 函数供 `pipeline.py` 引用
 
 ### 21.3 WebSocket 协议
 
@@ -1210,10 +1211,10 @@ Vue3 SPA + Naive UI（暗色主题 + 绿色强调），Vite 构建，产物由 F
 web/                        # Python 后端
 ├── app.py                  # FastAPI 应用入口
 ├── bridge/
-│   ├── __init__.py         # install_web_bridge() monkey-patch
+│   ├── __init__.py         # 仅 docstring（monkey-patch 已移除）
 │   ├── session.py          # BridgeSession + SessionManager
-│   ├── web_prompt.py       # 5 个 prompt_* 的 WebSocket 版
-│   └── web_ui.py           # ui.* 的 WebSocket 版 + WebChapterProgress
+│   ├── web_prompt.py       # get_current_session 辅助函数
+│   └── web_ui.py           # WebChapterProgress（ui.* 已迁入 core/ui.py）
 └── routers/
     └── novels.py           # REST API
 

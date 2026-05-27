@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import type { OutputMessage } from '../../store'
-import JsonViewer from './JsonViewer.vue'
 import RefineBlockViewer from './RefineBlockViewer.vue'
 
 const props = defineProps<{ messages: OutputMessage[] }>()

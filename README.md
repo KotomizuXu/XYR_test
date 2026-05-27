@@ -221,6 +221,12 @@ Orchestra/
 
 ## 变更日志
 
+### 2026-05-27 全面自检 + 文档同步
+
+- 执行 verification_protocol.md A-K 全部 47 项验证，结果全部通过（0 阻断、2 非阻断）
+- 验证协议升级至 v1.11：补充 K15（LLM 降级路径安全性）、K16（并发会话数据隔离）、K17（Context 截断完整性）三项盲区验证
+- system_reference.md 第 21 章同步为 web-native 架构描述（`__init__.py` monkey-patch 已在 #170 移除，文档反映当前状态）
+
 ### 2026-05-26 错误展示修复
 
 - 引入 `_PhaseHandledError` 标记异常，phase handler 展示友好消息后标记 raise，top-level 和 web 层识别标记后跳过重复展示

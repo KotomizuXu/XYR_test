@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
 const props = defineProps<{
   data: any
   type?: 'world' | 'outline' | 'style' | 'auto'
@@ -174,45 +172,37 @@ function getTitle(item: any): string {
 <template>
   <div v-if="!data || typeof data !== 'object'" class="jv-empty">暂无数据</div>
   <template v-else>
-    <template v-for="([groupKey, entries], gi) in [['scalars', classifyEntries(data).scalars], ['complex', classifyEntries(data).complex]]" :key="groupKey">
-
-      <!-- Scalar group: one unified descriptions table -->
-      <n-descriptions v-if="groupKey === 'scalars' && entries.length" bordered :column="1" label-placement="left" size="small" class="jv-table">
-        <template v-for="s in entries" :key="s.key">
-          <n-descriptions-item :label="label(s.key)">
-            <template v-if="s.kind === 'tags'">
-              <n-space size="small" wrap>
-                <n-tag v-for="(t, i) in s.val" :key="i" size="small" round>{{ typeof t === 'string' ? t : String(t) }}</n-tag>
-              </n-space>
-            </template>
-            <template v-else>
-              <span class="jv-text">{{ s.val }}</span>
-            </template>
-          </n-descriptions-item>
-        </template>
-      </n-descriptions>
-
-      <!-- Complex group: each item gets its own block -->
-      <template v-if="groupKey === 'complex'">
-        <template v-for="c in entries" :key="c.key">
-          <!-- Array of objects -->
-          <template v-if="c.kind === 'objectArray'">
-            <div class="jv-sub-title">{{ label(c.key) }}（{{ c.val.length }}）</div>
-            <n-collapse>
-              <n-collapse-item v-for="(item, i) in c.val" :key="i" :title="getTitle(item) || `${label(c.key)} ${i + 1}`" :name="`${c.key}-${i}`">
-                <JsonViewer :data="item" type="auto" />
-              </n-collapse-item>
-            </n-collapse>
+    <!-- Scalar group -->
+    <n-descriptions v-if="classifyEntries(data).scalars.length" bordered :column="1" label-placement="left" size="small" class="jv-table">
+      <template v-for="s in classifyEntries(data).scalars" :key="s.key">
+        <n-descriptions-item :label="label(s.key)">
+          <template v-if="s.kind === 'tags'">
+            <n-space size="small" wrap>
+              <n-tag v-for="(t, i) in s.val" :key="i" size="small" round>{{ typeof t === 'string' ? t : String(t) }}</n-tag>
+            </n-space>
           </template>
-
-          <!-- Nested object -->
-          <template v-else-if="c.kind === 'object'">
-            <div class="jv-sub-title">{{ label(c.key) }}</div>
-            <div class="jv-indent">
-              <JsonViewer :data="c.val" type="auto" />
-            </div>
+          <template v-else>
+            <span class="jv-text">{{ s.val }}</span>
           </template>
-        </template>
+        </n-descriptions-item>
+      </template>
+    </n-descriptions>
+
+    <!-- Complex group -->
+    <template v-for="c in classifyEntries(data).complex" :key="c.key">
+      <template v-if="c.kind === 'objectArray'">
+        <div class="jv-sub-title">{{ label(c.key) }}（{{ c.val.length }}）</div>
+        <n-collapse>
+          <n-collapse-item v-for="(item, i) in c.val" :key="i" :title="getTitle(item) || `${label(c.key)} ${Number(i) + 1}`" :name="`${c.key}-${i}`">
+            <JsonViewer :data="item" type="auto" />
+          </n-collapse-item>
+        </n-collapse>
+      </template>
+      <template v-else-if="c.kind === 'object'">
+        <div class="jv-sub-title">{{ label(c.key) }}</div>
+        <div class="jv-indent">
+          <JsonViewer :data="c.val" type="auto" />
+        </div>
       </template>
     </template>
   </template>
