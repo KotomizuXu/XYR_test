@@ -8,9 +8,12 @@ from pathlib import Path
 
 import yaml
 
+from agents.capability_extractor import CapabilityExtractor
 from agents.critic import CriticAgent
 from agents.director import DirectorAgent
 from agents.editor import EditorAgent
+from agents.outline_auditor import OutlineAuditor
+from agents.outline_global_checker import OutlineGlobalChecker
 from agents.plotter import PlotAgent
 from agents.reviewer import ReviewerAgent
 from agents.style_advisor import StyleAdvisorAgent
@@ -23,7 +26,7 @@ from core.prompt_utils import (
 from core.refine_prompts import (
     REFINE_WORLD_PROMPT, REFINE_CHARACTER_PROMPT,
     REFINE_LOCATION_PROMPT, REFINE_OUTLINE_PROMPT,
-    REFINE_HOLISTIC_PROMPT,
+    REFINE_HOLISTIC_PROMPT, REFINE_STYLE_PROMPT,
     REFINE_REWRITE_DIRECTIVE,
 )
 from core.state_manager import ChapterState, NovelState, StateManager, atomic_write_json
@@ -62,6 +65,9 @@ class NovelPipeline:
         self.editor = EditorAgent(self.llm, self.config)
         self.style_advisor = StyleAdvisorAgent(self.llm, self.config)
         self.critic = CriticAgent(self.llm, self.config)
+        self.capability_extractor = CapabilityExtractor(self.llm, self.config)
+        self.outline_auditor = OutlineAuditor(self.llm, self.config)
+        self.outline_global_checker = OutlineGlobalChecker(self.llm, self.config)
 
         self._interrupted = False
         self._current_state = None
@@ -79,6 +85,11 @@ class NovelPipeline:
             "writer": self.writer,
             "reviewer": self.reviewer,
             "editor": self.editor,
+            "style_advisor": self.style_advisor,
+            "critic": self.critic,
+            "capability_extractor": self.capability_extractor,
+            "outline_auditor": self.outline_auditor,
+            "outline_global_checker": self.outline_global_checker,
             "style_advisor": self.style_advisor,
             "critic": self.critic,
         }
@@ -188,13 +199,42 @@ class NovelPipeline:
 
         # Phase 0: Styling
         if state.phase == "styling":
-            ui.info(f"[风格顾问] 正在根据风格描述生成指南：{state.style_description or '传统文学风格，注重文笔和人物塑造'}")
-            state.style_guide = self.style_advisor.run(state.style_description or "传统文学风格", story_idea=state.story_idea)
+            style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
+
+            # 断点恢复：已有风格指南则直接进入精修，无需重新生成
+            if not state.style_guide:
+                ui.info(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
+                state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
+                if not state.style_guide:
+                    ui.error("[风格顾问] 生成失败，请重试")
+                    return
+                self.state_mgr.save(state)
+
+            ui.section("风格指南确认", state.style_guide.get("style_name", "?"))
+
+            def _save_style(r):
+                state.style_guide = r
+                self.state_mgr.save(state)
+
+            refined_style = self._refine_block(
+                label="风格指南",
+                initial=state.style_guide,
+                system_prompt=REFINE_STYLE_PROMPT,
+                context_summary=self._build_style_context(state),
+                on_update=_save_style,
+            )
+            if self._interrupted:
+                state.style_guide = refined_style
+                self.state_mgr.save(state)
+                ui.hint("[中断] 风格指南调整已保存，恢复后可继续精修")
+                return
+
+            state.style_guide = refined_style
             self._apply_style_temperatures(state.style_guide)
             self._apply_strictness(state)
             state.phase = "collecting_params"
             self.state_mgr.save(state)
-            ui.success(f"[风格顾问] 风格指南已生成：{state.style_guide.get('style_name', '?')}")
+            ui.success(f"[风格顾问] 风格指南已确认：{state.style_guide.get('style_name', '?')}")
 
         if self._interrupted:
             return
@@ -219,21 +259,58 @@ class NovelPipeline:
                 return
             ui.info("[编剧] 正在拆分章节和规划剧情...")
 
+            # Engine A: 提取能力矩阵（如果尚未提取）
+            if not state.capability_matrix:
+                ui.info("[大纲审计] Engine A: 正在提取设定能力矩阵...")
+                characters = (state.world_data or {}).get("characters", [])
+                locations = (state.world_data or {}).get("locations", [])
+                world_for_matrix = {k: v for k, v in (state.world_data or {}).items()
+                                    if k not in ("characters", "locations")}
+                state.capability_matrix = self.capability_extractor.run(
+                    world_for_matrix, characters, locations,
+                    style_guide=state.style_guide,
+                )
+                self.state_mgr.save(state)
+                ui.success(f"[大纲审计] 能力矩阵已提取："
+                           f"{len(state.capability_matrix.get('characters', {}))} 角色, "
+                           f"{len(state.capability_matrix.get('locations', {}))} 地点")
+
             def _save_plotting_progress(plans):
                 state.chapter_plans = list(plans)
                 self.state_mgr.save(state)
+
+            # 断点恢复：对齐拆章/审计两条进度线。崩溃可能落在「拆完 save」与
+            # 「审完 save」之间，导致尾部批次拆了但没审。截断到已审章节数，让
+            # plotter 重拆+重审那一批，保证两线一致、修正版不丢。
+            audited_count = len(state.chapter_audits)
+            if state.chapter_plans and len(state.chapter_plans) > audited_count:
+                dropped = len(state.chapter_plans) - audited_count
+                state.chapter_plans = state.chapter_plans[:audited_count]
+                ui.hint(f"[恢复] 丢弃 {dropped} 章「拆了未审」的尾部，将重拆+重审该批")
+
+            # 边拆边审：每拆完一批立即审计，审计重写后的修正版回填 plans，
+            # 影响后续批次拆分。审计异常单独捕获，避免误判为拆章失败。
+            def _on_batch(plans, batch_start, batch):
+                _save_plotting_progress(plans)
+                if self._interrupted:
+                    return
+                try:
+                    self._audit_one_batch(state, plans, batch_start, batch)
+                except Exception as e:
+                    logger.error(f"Outline audit error (batch_start={batch_start}): {e}")
+                    ui.warn("[大纲审计] 本批审计出错，已跳过审计，拆章继续")
+
+            ui.section("大纲审计", f"共 {state.total_chapters} 章（边拆边审）")
 
             try:
                 chapter_plans = self.plotter.run(
                     state.outline, state.world_data, state.total_chapters,
                     style_guide=state.style_guide, volumes=state.volumes,
                     existing_plans=state.chapter_plans,
-                    on_batch_complete=_save_plotting_progress,
+                    on_batch_complete=_on_batch,
                 )
             except Exception as e:
                 logger.error(f"Plotting phase error: {e}")
-                # 确保已有进度不丢失（首批失败时 chapter_plans 可能为 None，
-                # 设置为空列表以便恢复时 existing_plans=list([]) 能正确跳过已完成批次）
                 if state.chapter_plans is None:
                     state.chapter_plans = []
                 self.state_mgr.save(state)
@@ -245,6 +322,11 @@ class NovelPipeline:
 
             novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
             atomic_write_json(novel_dir / "chapters.json", chapter_plans)
+
+            # 全部边拆边审完成后的收尾：Engine D3+D4 全局检查 + 汇总
+            self._finalize_outline_audit(state, chapter_plans)
+            if self._interrupted:
+                return
 
             state.chapters = []
             for plan in chapter_plans:
@@ -606,6 +688,16 @@ class NovelPipeline:
         state.outline = outline
         self.state_mgr.save(state)
 
+    def _build_style_context(self, state: NovelState) -> str:
+        """为风格指南精修构建上下文摘要（故事火花 + 用户原始风格描述）。"""
+        parts: list[str] = []
+        if state.story_idea:
+            idea = state.story_idea.replace("\n", " ")
+            parts.append(f"## 故事火花\n{idea[:800]}")
+        if state.style_description:
+            parts.append(f"## 用户风格描述\n{state.style_description}")
+        return "\n\n".join(parts)
+
     def _build_holistic_context(self, state: NovelState) -> str:
         """为全量精修构建上下文（故事火花 + 风格偏好）。"""
         parts: list[str] = []
@@ -615,6 +707,225 @@ class NovelPipeline:
         if state.style_description:
             parts.append(f"## 风格偏好\n{state.style_description}")
         return "\n\n".join(parts)
+
+    # ── 大纲审计（Plotting 阶段 Engine B→C→D）────────────────────────────
+
+    def _build_audit_feedback(self, unapproved: list[tuple[int, dict]]) -> str:
+        """从审计 issues 构建 Plotter 可读的反馈文本（对齐 Writer review-reject loop 的 feedback 构建）。"""
+        parts = []
+        for _, audit in unapproved:
+            ch_num = audit.get("chapter_number", "?")
+            title = audit.get("title", "")
+            parts.append(f"### 第{ch_num}章「{title}」")
+
+            # 问题列表
+            issues = audit.get("issues", [])
+            if issues:
+                parts.append("\n#### 问题列表")
+                for issue in issues:
+                    severity = issue.get("severity", "unknown")
+                    issue_type = issue.get("type", "unknown")
+                    detail = issue.get("detail", "")
+                    suggestion = issue.get("suggestion", "")
+                    parts.append(f"- **[{severity}]** {issue_type}：{detail}")
+                    if suggestion:
+                        parts.append(f"  - 建议：{suggestion}")
+
+            # 保留优点（quality_scores ≥ 7 的维度）
+            qs = audit.get("quality_scores", {})
+            strengths = [f"{dim}={score}" for dim, score in qs.items() if score >= 7]
+            if strengths:
+                parts.append(f"\n#### 保留优点\n{', '.join(strengths)}")
+
+            parts.append("")  # 空行分隔
+
+        return "\n".join(parts)
+
+    def _audit_one_batch(
+        self, state: NovelState, plans: list[dict], batch_start: int, batch: list[dict]
+    ) -> None:
+        """审计单个批次（边拆边审）：B+C 逐章交叉校验 + 重写循环 + D1+D2 批次检查。
+
+        ★ 关键：plans 是 Plotter 的 all_plans 同一列表引用。重写后的章节计划必须
+        原地 splice 回 plans，下一批拆分的 _build_existing_summaries(all_plans) 才能
+        带上修正版，实现"前序审计修正影响后续拆分"。
+        """
+        # 跳过已审计的批次（断点恢复）
+        already_audited = len(state.chapter_audits)
+        if batch_start < already_audited:
+            return
+
+        audit_cfg = self.config.get("outline_audit", {})
+        max_retries = audit_cfg.get("audit_max_retries", 2)
+        stale_threshold = audit_cfg.get("stale_similarity_threshold", 0.92)
+        auto_rewrite = audit_cfg.get("auto_rewrite", True)
+        batch_size = 5
+
+        novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
+        ch_range = f"{batch[0].get('chapter_number', '?')}-{batch[-1].get('chapter_number', '?')}"
+        ui.info(f"[大纲审计] Engine B+C: 审核第 {ch_range} 章...")
+
+        audits = self.outline_auditor.run(
+            batch, state.capability_matrix or {},
+            state.outline or {}, style_guide=state.style_guide,
+        )
+
+        # 推送每章审计结果到前端
+        for audit in audits:
+            ui.show_chapter_audit(audit.get("chapter_number", 0), audit.get("title", ""), audit)
+
+        # ── 重写循环 ──
+        retries = 0
+        quality_history: list[float] = []
+        stale = False
+
+        while auto_rewrite:
+            unapproved = [(i, a) for i, a in enumerate(audits) if not a.get("approved")]
+            if not unapproved:
+                break
+            if retries >= max_retries:
+                ui.warn(f"[大纲审计] 已达 audit_max_retries={max_retries} 上限，接受当前版本")
+                break
+
+            retries += 1
+            failed_ch_nums = [a.get("chapter_number") for _, a in unapproved]
+            ui.warn(f"[大纲审计] {len(unapproved)} 章未通过，第{retries}次重写：第{failed_ch_nums}章")
+
+            # 构建反馈
+            feedback = self._build_audit_feedback(unapproved)
+            if stale:
+                feedback += (
+                    "\n\n[系统检测] 上次重写几乎未修改内容，本次必须进行实质性改写。"
+                    "不允许仅做同义替换或微调措辞，必须大幅重组情节点和叙事方式。"
+                )
+
+            # 质量停滞检测
+            avg_quality = sum(a.get("total_quality", 0) for a in audits) / len(audits)
+            quality_history.append(avg_quality)
+            if len(quality_history) >= 2 and quality_history[-1] <= quality_history[-2]:
+                ui.warn(f"[大纲审计] 质量分停滞（{quality_history[-2]:.1f}→{quality_history[-1]:.1f}），接受当前版本")
+                break
+
+            # 获取旧计划
+            old_plans = [plans[batch_start + i] for i, _ in unapproved]
+
+            # 调用 Plotter 重写
+            new_plans = self.plotter.regenerate_chapters(
+                plans, failed_ch_nums, feedback, old_plans,
+                state.world_data, state.outline, style_guide=state.style_guide,
+            )
+
+            # 相似度检测
+            old_json = json.dumps(old_plans, ensure_ascii=False, sort_keys=True)
+            new_json = json.dumps(new_plans, ensure_ascii=False, sort_keys=True)
+            similarity = SequenceMatcher(None, old_json, new_json).ratio()
+            stale = similarity > stale_threshold
+            if stale:
+                ui.warn(f"[大纲审计] 重写相似度 {similarity:.0%}，内容几乎未修改")
+
+            # 每轮保存版本文件
+            for r_idx, (batch_idx, _) in enumerate(unapproved):
+                ch_num = failed_ch_nums[r_idx]
+                version_path = novel_dir / f"chapter_plans_{ch_num:02d}_r{retries}.json"
+                atomic_write_json(version_path, new_plans[r_idx])
+
+            # ★ splice 回 plans（Plotter 的 all_plans 引用），使修正版传播到后续批次
+            for new_plan in new_plans:
+                ch_num = new_plan.get("chapter_number")
+                for idx, p in enumerate(plans):
+                    if p.get("chapter_number") == ch_num:
+                        plans[idx] = new_plan
+                        break
+
+            # 重新审计整个批次（不只是重写的章节，保证级联一致性）
+            new_batch = plans[batch_start:batch_start + batch_size]
+            new_audits = self.outline_auditor.run(
+                new_batch, state.capability_matrix or {},
+                state.outline or {}, style_guide=state.style_guide,
+            )
+            for audit in new_audits:
+                ui.show_chapter_audit(audit.get("chapter_number", 0), audit.get("title", ""), audit)
+
+            # 记录 revision_count 到审计结果
+            for audit in new_audits:
+                if audit.get("chapter_number") in failed_ch_nums:
+                    audit["revision_count"] = retries
+
+            audits = new_audits
+
+        # ── 人工干预：仅在循环结束后仍有问题时暂停 ──
+        still_unapproved = [a for a in audits if not a.get("approved")]
+        if still_unapproved and retries > 0:
+            failed_names = [f"第{a.get('chapter_number')}章「{a.get('title', '')}」" for a in still_unapproved]
+            ui.warn(f"[大纲审计] 自动重写后仍有 {len(still_unapproved)} 章未通过：{', '.join(failed_names)}")
+
+            audit_summary = {
+                "batch_range": ch_range,
+                "approved_count": len(audits) - len(still_unapproved),
+                "unapproved_count": len(still_unapproved),
+                "audits": audits,
+            }
+            self._refine_block(
+                label=f"大纲审计结果（第 {ch_range} 章）",
+                initial=audit_summary,
+                system_prompt=self.outline_auditor.system_prompt,
+                context_summary=json.dumps(audit_summary, ensure_ascii=False, indent=2),
+            )
+
+        # 保存本批审计结果
+        state.chapter_audits.extend(audits)
+
+        # Engine D1+D2: 批次级检查（遗忘曲线 + 节奏曲线）
+        ui.info("[大纲审计] Engine D1+D2: 批次级检查...")
+        thresholds = self._get_audit_thresholds(state)
+        batch_summary = self.outline_global_checker.run_batch(
+            plans[:batch_start + len(batch)],
+            state.capability_matrix or {},
+            state.outline or {},
+            style_guide=state.style_guide,
+            thresholds=thresholds,
+        )
+        state.batch_audits.append({**batch_summary, "batch_range": ch_range})
+        ui.show_batch_audit(ch_range, batch_summary)
+
+        self.state_mgr.save(state)
+
+    def _finalize_outline_audit(self, state: NovelState, chapter_plans: list[dict]) -> None:
+        """全部章节边拆边审完成后的收尾：Engine D3+D4 全局检查 + 审计汇总。"""
+        # Engine D3+D4: 全局级检查（完整性 + 跨批次一致性）
+        if not state.global_audit:
+            ui.info("[大纲审计] Engine D3+D4: 全局完整性扫描...")
+            thresholds = self._get_audit_thresholds(state)
+            state.global_audit = self.outline_global_checker.run_global(
+                chapter_plans, state.capability_matrix or {},
+                state.outline or {},
+                style_guide=state.style_guide,
+                thresholds=thresholds,
+            )
+            ui.show_global_audit(state.global_audit)
+            self.state_mgr.save(state)
+
+        # 审计汇总
+        total_issues = sum(len(a.get("issues", [])) for a in state.chapter_audits)
+        major_count = sum(
+            1 for a in state.chapter_audits
+            for i in a.get("issues", []) if i.get("severity") == "major"
+        )
+        approved_count = sum(1 for a in state.chapter_audits if a.get("approved"))
+        ui.success(
+            f"[大纲审计] 完成: {approved_count}/{len(state.chapter_audits)} 章通过, "
+            f"{total_issues} 个问题 (major={major_count})"
+        )
+
+
+    def _get_audit_thresholds(self, state: NovelState) -> dict:
+        """获取遗忘检测阈值，优先从 style_guide 获取，否则用默认值。"""
+        thresholds = (state.style_guide or {}).get("suggestions", {}).get("tracking_thresholds", {})
+        return {
+            "character": thresholds.get("character", 10),
+            "plotline": thresholds.get("plotline", 12),
+            "foreshadowing": thresholds.get("foreshadowing", 20),
+        }
 
     def _advance_to_plotting(self, state: NovelState) -> None:
         """导演阶段收尾：持久化 JSON 文件，推进到 plotting。"""
@@ -1074,6 +1385,9 @@ class NovelPipeline:
                         user_feedback=action,
                         context=context_summary,
                     )
+                    # 检查是否被中断（用户刷新页面）
+                    if self._interrupted:
+                        return result
                     if new_result is None:
                         ui.warn("打磨失败，保留当前版本")
                         continue
@@ -1088,6 +1402,9 @@ class NovelPipeline:
                             context=context_summary,
                             force_rewrite=True,
                         )
+                        # 检查是否被中断
+                        if self._interrupted:
+                            return result
                         if retry is not None:
                             new_result = retry
                             if self._refine_too_similar(result, new_result):
@@ -1109,6 +1426,9 @@ class NovelPipeline:
                     rewrite=True,
                     previous=result,
                 )
+                # 检查是否被中断
+                if self._interrupted:
+                    return result
                 if new_result is None:
                     ui.warn("重生成失败，保留当前版本")
                     return result

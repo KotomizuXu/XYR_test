@@ -16,7 +16,8 @@ flowchart TD
         P0A[requirement-detector<br/>8种写作规范探测] --> P0B
         P0B[setting-detector<br/>7种题材+3个知识库] --> P0C
         P0C[style-detector<br/>5种文风+冲突矩阵] --> P0D
-        P0D[动态温度推荐<br/>agent_temperatures]
+        P0D[动态温度推荐<br/>agent_temperatures] --> P0E
+        P0E[_refine_block 确认循环<br/>是/调整/重写<br/>REFINE_STYLE_PROMPT<br/>每次调整自动落盘]
     end
 
     P0 --> |style_guide JSON| TEMP[_apply_style_temperatures<br/>设置各Agent温度]
@@ -37,15 +38,27 @@ flowchart TD
 
     P1 --> |holistic ✓<br/>world.json / outline.json| P2
 
-    subgraph P2["Phase 2: 编剧 PlotAgent（断点续写）"]
-        P2A[每 BATCH_SIZE 章一批<br/>批次完成后回调保存 state] --> P2B
-        P2B[剧情要点+情绪线] --> P2C
-        P2C[伏笔+场景结构<br/>scene_structure<br/>tension_level]
+    subgraph P2["Phase 2: 编剧 PlotAgent + 大纲审计（边拆边审 / 断点续写）"]
+        P2Z[Engine A: 能力矩阵提取<br/>拆章前一次性] --> P2A
+        P2A[每 BATCH_SIZE=5 章生成一批<br/>含前序摘要 existing_summaries] --> P2B
+        P2B[剧情要点+情绪线+伏笔+场景结构] --> P2D
+        P2D[本批立即审计 _audit_one_batch<br/>B+C: 逐章交叉校验+质量评分<br/>D1+D2: 遗忘曲线+节奏检测] --> P2E
+        P2E{本批有未通过章节?}
+        P2E --> |是| P2F[Plotter.regenerate_chapters<br/>温度+0.25 + 7条重写规则<br/>邻居锚定 + 上下文截断10000]
+        P2F --> P2G[保存版本文件 chapter_plans_XX_rN.json<br/>★splice 回 all_plans 引用]
+        P2G --> P2H[相似度检测+质量停滞检测<br/>重新审计整个批次]
+        P2H --> P2E
+        P2E --> |否/达到上限| P2I{仍有问题?}
+        P2I --> |是| P2J[_refine_block 用户决策<br/>本批立即暂停 yes/adjust/rewrite]
+        P2I --> |否| P2K{还有下一批?}
+        P2J --> P2K
+        P2K --> |是 修正版影响后续拆分| P2A
+        P2K --> |否| P2L[_finalize_outline_audit<br/>D3+D4: 全局完整性+跨批次一致性]
     end
 
-    P2 -.-> |API 报错<br/>已有批次保存到 chapter_plans| P2
+    P2 -.-> |API 报错/中断<br/>恢复时截断 chapter_plans 到已审章数| P2
 
-    P2 --> |chapters.json| P25
+    P2 --> |chapters.json<br/>+ capability_matrix<br/>+ chapter_audits<br/>+ batch_audits<br/>+ global_audit| P25
 
     subgraph P25["Phase 2.5: 追踪系统初始化"]
         P25A[character_state.json<br/>主角/配角分离+出场追踪+一致性]

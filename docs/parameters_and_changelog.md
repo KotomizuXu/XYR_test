@@ -51,6 +51,26 @@
 | 上下文预算·中程精简摘要章数 | `7` | — | — | config.yaml `context_budget.recent_chapters_condensed`（#184） |
 | 上下文预算·检索锚点数 | `8` | — | — | config.yaml `context_budget.foreshadowing_top_k`（#184） |
 
+### 大纲审计配置（outline_audit）
+
+| 参数 | 默认值 | AI 推荐 | 用户确认 | 位置/说明 |
+|------|--------|---------|----------|-----------|
+| 审计最大重试次数 | `2` | — | — | config.yaml `outline_audit.audit_max_retries`（Engine B+C 审核不通过时最多重写次数，从1提升到2） |
+| 相似度检测阈值 | `0.92` | — | — | config.yaml `outline_audit.stale_similarity_threshold`（新旧 plan JSON 相似度 > 此值判定为 stale，触发升温重写） |
+| 自动重写开关 | `true` | — | — | config.yaml `outline_audit.auto_rewrite`（true=自动重写不通过章节；false=只展示审计结果不自动重写） |
+| 重写摘要上下文上限 | `10000` | — | — | config.yaml `outline_audit.plotter_rewrite_ctx_cap`（重写时摘要上限，常规生成时 20000，重写时降低以留出更多 token 给审计反馈） |
+| 重写温度提升量 | `0.25` | — | — | config.yaml `outline_audit.rewrite_temperature_boost`（基础温度 + 此值，上限 0.95） |
+| 默认能力分·主角 | `5` | — | — | config.yaml `outline_audit.default_capability_score.protagonist` |
+| 默认能力分·配角 | `4` | — | — | config.yaml `outline_audit.default_capability_score.supporting` |
+| 默认能力分·路人 | `3` | — | — | config.yaml `outline_audit.default_capability_score.minor` |
+| 质量评分总分 | `50` | — | — | config.yaml `outline_audit.quality_threshold.total_max`（5维×10分） |
+| 质量评分打回阈值 | `35` | — | — | config.yaml `outline_audit.quality_threshold.reject_below`（<35 必须打回） |
+| 质量评分条件通过 | `42` | — | — | config.yaml `outline_audit.quality_threshold.conditional_pass`（35-42 条件通过） |
+| 连续高张力上限 | `3` | — | — | config.yaml `outline_audit.pacing_rules.max_consecutive_high` |
+| 连续低张力上限 | `3` | — | — | config.yaml `outline_audit.pacing_rules.max_consecutive_low` |
+| 连续相同情绪上限 | `4` | — | — | config.yaml `outline_audit.pacing_rules.max_same_emotion` |
+| 遗忘检测启用 | `true` | — | — | config.yaml `outline_audit.forgotten_check`（阈值复用 style_guide.suggestions.tracking_thresholds） |
+
 ### 用户交互输入（cmd_new）
 
 | 参数 | 来源 | 位置 |
@@ -946,3 +966,36 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | 编号 | 严重度 | 问题 | 修复位置 |
 |------|--------|------|----------|
 | #188 | 中等 | Plotter 跨批次生成时偶发把卷名作为前缀拼进章节 `title`（如第 16 章 `"第二卷：虚假生路 - 沉溺"`、第 20 章 `"第二卷：虚假生路 - 献祭"`），前端展示 `第N章 {title}` 出现重复卷名；该小说本身 `volumes=null` 也会发生（LLM 自行脑补） | `prompts/plotter_system.txt` — title 字段约束改为"只写本章主题词组，4-12 字；禁止以'第N卷'/'卷X'/'第N幕'/'Volume N'/卷名/幕名作前缀"；`agents/plotter.py` — 新增 `_sanitize_title` 静态方法 + `_TITLE_PREFIX_RE`，`_generate_batch` 入 list 前自动清洗；**故意不清"第N章"前缀**——避免误杀"第三章隔间"这类合法剧情元素；存量 state 已 patch（`output/血色白纸鹤/novel_state.json` 第 16/20 章已修正，备份 `.bak`） |
+
+### 2026-05-28 Plotting 阶段大纲审计系统（四引擎架构）
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #189 | 新功能 | Plotter 拆章后缺乏对"角色能力超标 / 世界规则违反 / 伏笔断裂 / 节奏失衡 / 大纲漏覆盖"的自动校验，问题只能等写作阶段才暴露，返工成本高 | 新增大纲审计四引擎：`agents/capability_extractor.py`（Engine A 能力矩阵提取）+ `agents/outline_auditor.py`（Engine B+C 逐章交叉校验+5维质量评分）+ `agents/outline_global_checker.py`（Engine D 遗忘曲线/节奏曲线/完整性/跨批次一致性）；配套 3 个 prompt（`capability_extract_system.txt`/`outline_audit_system.txt`/`outline_global_check_system.txt`）；`core/pipeline.py` 新增 `_run_outline_audit`/`_build_audit_feedback`/`_get_audit_thresholds` 编排；`core/state_manager.py` `NovelState` 加 4 字段（`capability_matrix`/`chapter_audits`/`batch_audits`/`global_audit`）支持断点恢复跳过已审批次；`core/ui.py` 加 `show_chapter_audit`/`show_batch_audit`/`show_global_audit`；`web/routers/novels.py` 详情接口暴露 4 字段；`config.yaml` 加 `outline_audit` 配置段 |
+| #190 | 新功能 | 审计发现问题后需手动修，缺少自动重写闭环 | `agents/plotter.py` 新增 `regenerate_chapters()` + `_validate_chapter_plan_fields()`，对齐 Writer review-reject loop：温度 +0.25（上限 0.95）、7 条重写规则、上下文截断 `plotter_rewrite_ctx_cap=10000`、JSON 字段完整性校验、邻居章节锚定；新增 `prompts/outline_rewrite_system.txt`；`_run_outline_audit` 实现"审计→重写→重新审计整批"循环，含相似度检测（>0.92 判 stale 升温重写）、质量停滞检测（连续2轮不提升即停）、每轮存版本文件 `chapter_plans_XX_rN.json`；自动重写后仍有问题才走 `_refine_block` 让用户决策（方案C：每5章仅在有问题时暂停） |
+
+### 2026-05-28 Styling 阶段用户确认循环
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #191 | 增强 | StyleAdvisor 生成风格指南后直接进入下一阶段，用户无法在拆章前查看/调整/重写风格指南 | `core/pipeline.py` Phase 0 接入 `_refine_block` 三选一确认循环（yes/adjust/rewrite），新增 `_build_style_context`（故事火花+用户风格描述摘要）；`core/refine_prompts.py` 新增 `REFINE_STYLE_PROMPT`；支持断点恢复（`state.style_guide` 非空则跳过重新生成直接进精修），`on_update` 回调每次调整自动落盘防崩溃丢进度 |
+
+### 2026-05-28 前端刷新按钮 header-extra 不渲染修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #192 | 中等 | NovelDetailView 各 Tab 新增的"刷新数据"按钮在浏览器中完全不显示。根因：Naive UI `n-card` 仅在拥有 `title`/`#header` 插槽/`closable` 之一时才渲染 header 区块（`card/src/Card.mjs:190-214` `mergedChildren \|\| this.closable ? ... : null`），而 `#header-extra` 嵌在 header 内；styling/collecting_params/directing/writing 四张卡片均无 title，按钮被静默丢弃。同存量的"回滚到此阶段"按钮也一直隐藏 | `frontend/src/views/NovelDetailView.vue` — 四张卡片补 `:title="phaseLabel.xxx"` 使 header 区块渲染；plotting Tab 刷新按钮原被 `v-if="phaseState==='past'"` 限制，移出改为始终显示（回滚按钮仍仅 past 显示）；改后须 `npm run build` 重建 `frontend/dist/`（`web/app.py` 服务打包产物，非 dev server） |
+
+### 2026-05-28 大纲审计 OutlineGlobalChecker 抽象方法缺失修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #193 | 严重 | 风格分析后进入 plotting 阶段即崩 `TypeError: Can't instantiate abstract class OutlineGlobalChecker with abstract method run`。根因：`BaseAgent.run` 是 `@abstractmethod`（base.py:103-104），`OutlineGlobalChecker` 只实现 `run_batch`/`run_global`，漏了 `run`，`NovelPipeline.__init__`（pipeline.py:70）实例化时抛错 | `agents/outline_global_checker.py` — 新增 `run(**kwargs)` 委托到 `run_global`，满足抽象约束。教训：import 冒烟测试须含**实例化**（`NovelPipeline()`），仅 import 不能捕获抽象方法缺失 |
+
+### 2026-05-28 大纲审计改为「边拆边审」+ 持久化展示 + 大纲入口
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #194 | 增强 | 原大纲审计是「全部拆完再统一审」，前 1-5 章经审计修正的版本无法影响后续章节拆分，违背「保证前序对后续影响」诉求 | `core/pipeline.py` — 抽 `_audit_one_batch(state, plans, batch_start, batch)`（搬原 `_run_outline_audit` 循环体），`_run_outline_audit` 瘦身改名 `_finalize_outline_audit`（只留 Engine D3+D4 全局检查 + 汇总）；`agents/plotter.py` — `on_batch_complete` 签名扩展为 `(all_plans, batch_start_idx, batch)`（L211/226 两处）；pipeline 用 `_on_batch` 闭包在每批拆完后调审计。**关键**：`_audit_one_batch` 的重写 splice 改回填**传入的 plans**（=plotter 的 all_plans 同一引用），下一批 `_build_existing_summaries(all_plans)` 自动带修正版 |
+| #195 | 中等 | 边拆边审下崩溃可能落在「拆完 save」与「审完 save」之间，导致尾部批次拆了但没审，plotter 按 `len(chapter_plans)` 续拆会静默跳过该批 | `core/pipeline.py` — plotting 阶段调 plotter.run 前对齐两线：`if len(chapter_plans) > len(chapter_audits): chapter_plans = chapter_plans[:audited_count]`，丢弃「拆了未审」尾部重拆+重审（≤5章代价）。审计异常在 `_on_batch` 内单独 try/except，不误判为拆章失败 |
+| #196 | 增强 | `batch_audits`/`global_audit` 后端已暴露但前端持久化页面零消费，刷新后看不到；MessageLog 内联渲染无法复用 | 新增 `frontend/src/components/display/BatchAuditView.vue` + `GlobalAuditView.vue`（迁移 MessageLog 内联渲染+样式）；MessageLog.vue 改为引用子组件；NovelDetailView plotting Tab 章节列表下方加批次/全局审计折叠区（消费 `detail.batch_audits`/`detail.global_audit`）+ 顶部加「查看大纲」入口（复用 RefineBlockViewer 渲染 `detail.outline`）；`_audit_one_batch` 持久化 batch_summary 时注入 `batch_range` 供前端标题展示 |

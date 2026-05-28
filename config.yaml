@@ -44,3 +44,24 @@ agents:
     temperature: 0.3
   critic:
     temperature: 0.5
+
+# 大纲审计配置（Plotting 阶段 Engine A→D）
+outline_audit:
+  audit_max_retries: 2           # Engine B+C 审核不通过时最多重试次数（从1提升到2，给重写循环更多机会）
+  stale_similarity_threshold: 0.92  # 相似度检测阈值（>0.92 判定为 stale，触发升温重写）
+  auto_rewrite: true             # true=自动重写不通过章节；false=只展示审计结果不自动重写
+  plotter_rewrite_ctx_cap: 10000 # 重写时摘要上下文上限（常规生成时 20000，重写时降低以留出更多 token 给审计反馈）
+  rewrite_temperature_boost: 0.25 # 重写温度提升量（基础温度 +0.25，上限 0.95）
+  default_capability_score:      # Engine A: 未明确设定时的默认能力分
+    protagonist: 5
+    supporting: 4
+    minor: 3
+  quality_threshold:             # Engine C: 5维评分打回阈值
+    total_max: 50                # 5维×10分
+    reject_below: 35             # <35 必须打回
+    conditional_pass: 42         # 35-42 条件通过
+  pacing_rules:                  # Engine D2: 节奏检测规则
+    max_consecutive_high: 3      # 连续高张力章节上限
+    max_consecutive_low: 3       # 连续低张力章节上限
+    max_same_emotion: 4          # 连续相同情绪类型上限
+  forgotten_check: true          # Engine D1: 是否启用遗忘曲线检测（阈值复用 style_guide.suggestions.tracking_thresholds）

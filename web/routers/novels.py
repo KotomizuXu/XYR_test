@@ -111,6 +111,10 @@ async def get_novel_detail(novel_name: str):
             }
             for v in (state.volumes or [])
         ] if state.volumes else None,
+        "capability_matrix": state.capability_matrix,
+        "chapter_audits": state.chapter_audits,
+        "batch_audits": state.batch_audits,
+        "global_audit": state.global_audit,
     }
 
 

@@ -137,6 +137,73 @@ Plotter 为每章生成一个 JSON 对象，存入 `state.chapter_plans[]`。
 
 ---
 
+## 二·补、大纲审计输出字段链路（Engine A→D）
+
+> *最后验证：2026-05-28*
+
+Plotting 阶段**边拆边审**：Plotter 每拆完一批（5 章）即触发 `pipeline._audit_one_batch`（B+C 逐章校验 + 重写循环 + D1+D2 批次检查），全部拆完后 `pipeline._finalize_outline_audit` 跑 D3+D4 全局检查。Engine A 能力矩阵在拆章前一次性提取。三个审计 Agent 的输出分别落入 `NovelState` 的 4 个字段，经 `web/routers/novels.py` 详情接口暴露，由前端 `MessageLog.vue`（实时消息流，batch/global 已抽为 `BatchAuditView.vue`/`GlobalAuditView.vue` 子组件）和 `NovelDetailView.vue`（Plotting Tab 每章折叠面板 + 章节列表下方批次/全局审计折叠区 + 顶部大纲入口）消费。
+
+### 2补.1 Engine A — CapabilityExtractor → `state.capability_matrix`
+
+| 顶层字段 | Prompt 定义（`capability_extract_system.txt`） | 消费者 |
+|---------|-----------------------------------------------|--------|
+| `characters` | ✅ 角色能力矩阵（`capabilities` 能力域分数 + `constraints` 物理/言语约束 + `growth_ceiling` 阶段天花板） | OutlineAuditor（能力超标检测）、OutlineGlobalChecker（遗忘/完整性遍历）、前端能力矩阵展示 |
+| `world_rules` | ✅ 世界规则矩阵（`power_system` 等级体系 + `distance_matrix` 地点距离 + `factions` 势力 + 大事件年表） | OutlineAuditor（世界规则违反检测）、OutlineGlobalChecker（势力完整性） |
+| `locations` | ✅ 地点约束矩阵（来源 `locations[]` 的 atmosphere/function/five_senses/scale/position） | OutlineAuditor（地点一致性检测） |
+
+> 提取失败兜底：返回 `{"characters": {}, "world_rules": {}, "locations": {}}`（`capability_extractor.py:30`）。
+
+### 2补.2 Engine B+C — OutlineAuditor → `state.chapter_audits[]`
+
+每章一个对象，`outline_auditor.run` 返回 list。
+
+| 字段 | Prompt 定义（`outline_audit_system.txt`） | 生产/约束 | 消费者 |
+|------|------------------------------------------|-----------|--------|
+| `chapter_number` | ✅ | 章节号 | pipeline（splice 回填）、前端 `auditByChapter` map key |
+| `title` | ✅ | 章节标题 | 前端审计卡片标题 |
+| `capability_manifest` | ✅ B1 | 角色能力表现 `{setting→actual, status}` | `ui.show_chapter_audit`、前端能力矩阵摘要 |
+| `quality_scores` | ✅ C1 | 5 维评分（plot_progression/pacing/opening_hook/ending_hook/character_depth，各 0-10） | 前端质量评分条 |
+| `total_quality` | ✅ | 5 维总分（0-50） | 前端 `{n}/50` 标签、pipeline 质量停滞检测 |
+| `issues` | ✅ B1-B6+C1 汇总 | `[{severity: major\|warning\|note, type, detail, suggestion}]` | `_build_audit_feedback`（重写反馈）、前端问题列表 |
+| `approved` | ✅ | `false` 当存在 major issue 或 `total_quality<35` | pipeline 重写循环判定、前端通过/打回标签 |
+| `revision_count` | ⚙️ pipeline 写入 | 重写轮次（`_audit_one_batch` 对被重写章节回填） | 审计版本追溯 |
+
+> 返回类型校验：非 list 时返回 `[]`（`outline_auditor.py:48`）。
+
+### 2补.3 Engine D — OutlineGlobalChecker → `state.batch_audits[]` + `state.global_audit`
+
+`run_batch`（每 5 章，scope=batch）→ append 到 `batch_audits[]`；`run_global`（拆章全部完成，scope=global）→ 存 `global_audit`。
+
+| 字段 | Prompt 定义（`outline_global_check_system.txt`） | scope | 消费者 |
+|------|------------------------------------------------|-------|--------|
+| `forgotten_elements` | ✅ D1（characters/plotlines/foreshadowing 超阈值未出现） | batch+global | `ui.show_batch_audit`、前端遗忘曲线 |
+| `pacing_curve` | ✅ D2（tension_sequence + warnings） | batch+global | 前端节奏曲线图 |
+| `completeness` | ✅ D3（unused_characters/locations/factions + uncovered_turning_points/acts + coverage_rate） | **仅 global** | `ui.show_global_audit`、前端覆盖率圆环 |
+| `cross_batch_issues` | ✅ D4（character_drift/plotline_drop 等，severity 标注） | **仅 global** | 前端跨批次一致性列表 |
+
+> 遗忘检测阈值来源：`_get_audit_thresholds` 优先取 `style_guide.suggestions.tracking_thresholds`，缺省 character=10/plotline=12/foreshadowing=20。
+> coverage_rate 百分比字段（`characters_pct` 等）为整数（71 而非 0.71）。
+
+### 2补.4 链路检查点
+
+新增/修改审计字段时需同步：
+1. 对应 prompt（`capability_extract`/`outline_audit`/`outline_global_check`/`outline_rewrite`_system.txt）的 JSON schema
+2. `core/ui.py` 的 `show_chapter_audit`/`show_batch_audit`/`show_global_audit` 透传字段
+3. `web/routers/novels.py` 详情接口的 4 字段暴露
+4. 前端：实时渲染 `MessageLog.vue` + 子组件 `BatchAuditView.vue`/`GlobalAuditView.vue`；持久化 `NovelDetailView.vue`（Plotting Tab 每章折叠面板消费 chapter_audits + 章节列表下方折叠区消费 batch_audits/global_audit）
+5. `NovelState`（`state_manager.py`）字段定义
+
+### 2补.5 边拆边审的进度不变量（关键）
+
+边拆边审下 `chapter_plans` 与 `chapter_audits` 两条进度线必须对齐到同一批次边界。每批顺序：`Plotter 拆5章 → save(chapter_plans) → _audit_one_batch 审 → save(chapter_audits)`。
+
+- **回调传播**：`_audit_one_batch` 的重写 splice 必须回填**传入的 plans**（= Plotter 的 `all_plans` 同一列表引用），下一批 `_build_existing_summaries(all_plans)` 才能带修正版 → 实现「前序影响后续」。误改 `state.chapter_plans` 副本则修正不传播。
+- **跳过已审**：`_audit_one_batch` 开头 `if batch_start < len(state.chapter_audits): return`。
+- **断点恢复对齐**：进入 plotting 调 `plotter.run` 前，`if len(chapter_plans) > len(chapter_audits): chapter_plans = chapter_plans[:audited_count]`，丢弃「拆了未审」尾部，Plotter 重拆+重审该批（≤5 章代价）。崩溃落在两次 save 之间也不会出现「拆了永不审」。
+- **异常隔离**：审计异常在 `_on_batch` 内单独捕获，不被 plotting 的 try/except 误判为拆章失败。
+
+---
+
 ## 三、Tracker 数据链路
 
 > *最后验证：2026-05-22*
@@ -921,6 +988,7 @@ if groups.get("inactive") or groups.get("deceased"): ...
 | 每章最多字数 | pipeline.py `_collect_params` | ✅ `prompt_int(min_val=words_min)` | 已修复（max<min 无检查） |
 | ~~遗忘阈值（3 个）~~ | ~~pipeline.py `_collect_params`~~ | **已移除**（2026-05-21 #60）：AI 推荐值默认采纳，不再让用户输入；`show_param_confirmed` 仍展示 | — |
 | ~~禁用检查类别~~ | ~~pipeline.py `_collect_params`~~ | **已移除**（2026-05-21 #60）：`config["disabled_checks"]` 保持空列表（全部启用） | — |
+| 风格指南精修三选一 | pipeline.py `_refine_block`（styling phase） | ✅ 复用 `_confirm_refine`：`prompt_choice("yes/adjust/rewrite")`；adjust 后进入 `prompt_multiline`；UserAbort 传播到 `_refine_block` | 安全 |
 | 精修阶段三选一 | pipeline.py `_confirm_refine`（refining phase） | ✅ `prompt_choice("yes/adjust/rewrite")`；adjust 后进入 `prompt_multiline`；UserAbort 视为 yes 继续 | 安全 |
 | 精修阶段调整意见 | pipeline.py `_confirm_refine` → adjust 分支 | ✅ `prompt_multiline`，空字符串视为 yes | 安全 |
 | 退休元素选择 | pipeline.py `_handle_retire` | ✅ `prompt_single` + isdigit + 范围检查 | 安全 |
@@ -1059,7 +1127,8 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 |------|------|---------------|
 | core/braindump.py | `braindump` / `_braindump_section` | show_braindump_intro + divider + show_braindump_result + show_braindump_summary + info |
 | pipeline.py | `start_new_novel` / `resume_novel` | banner + error/hint |
-| pipeline.py | `_run_pipeline` Phase 0-5 | info / success / warn / show_completion |
+| pipeline.py | `_run_pipeline` Phase 0-5 | info / success / warn / show_completion / section + show_refine_block（Phase 0 风格精修） |
+| pipeline.py | `_audit_one_batch`（Phase 2 边拆边审：每批审计+重写循环）+ `_finalize_outline_audit`（D3+D4 全局收尾） | show_chapter_audit / show_batch_audit / show_global_audit + warn（重写/停滞/相似度）+ show_refine_block（用户决策） |
 | pipeline.py | `_collect_params` | show_param_suggestions + section + show_param_confirmed |
 | pipeline.py | `_write_chapters` / `_edit_chapters` | section（章节头）+ info / warn / success / hint（stage 进展） |
 | pipeline.py | `_checkpoint` | section；Web 模式自动保存继续（#124） |
@@ -1088,6 +1157,8 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 3. `_refine_block()` 传入 `REFINE_HOLISTIC_PROMPT` + `full_json` → 用户对整体做"是/调整/重写"三选一
 4. 每次调整/重写 LLM 接收并返回完整 JSON，确保跨 block 一致性
 5. 精修完成 → 拆回 `state.world_data` 和 `state.outline` → 落盘 `world.json`/`outline.json` → `state.phase = "plotting"`
+
+> **Phase 0 风格指南也使用 `_refine_block`**（2026-05-28 新增）：StyleAdvisor 生成 `style_guide` 后，用户通过 `_refine_block(label="风格指南", system_prompt=REFINE_STYLE_PROMPT)` 做"是/调整/重写"三选一确认，每次调整通过 `on_update` 回调自动落盘。中断后恢复时若 `state.style_guide` 非空则跳过重新生成直接进入精修循环。
 
 ### 20.2 全量精修的 JSON 结构
 

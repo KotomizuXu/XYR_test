@@ -2,6 +2,8 @@
 import { nextTick, ref, watch } from 'vue'
 import type { OutputMessage } from '../../store'
 import RefineBlockViewer from './RefineBlockViewer.vue'
+import BatchAuditView from './BatchAuditView.vue'
+import GlobalAuditView from './GlobalAuditView.vue'
 
 const props = defineProps<{ messages: OutputMessage[] }>()
 const logRef = ref<HTMLElement | null>(null)
@@ -25,6 +27,22 @@ const kindBorder: Record<string, string> = {
   warn: '#d0a000',
   error: '#d03030',
   hint: '#78788c',
+}
+
+function severityColor(sev: string): string {
+  if (sev === 'major') return '#d03030'
+  if (sev === 'warning') return '#d0a000'
+  return '#78788c'
+}
+function capStatusColor(status: string): string {
+  if (status === 'major') return '#d03030'
+  if (status === 'warning') return '#d0a000'
+  return '#36ad6a'
+}
+function qualityColor(score: number): string {
+  if (score >= 7) return '#36ad6a'
+  if (score >= 5) return '#d0a000'
+  return '#d03030'
 }
 </script>
 
@@ -130,6 +148,59 @@ const kindBorder: Record<string, string> = {
         </div>
         <RefineBlockViewer :content="msg.data.content" :label="msg.data.label" />
       </div>
+
+      <!-- Chapter Audit -->
+      <div v-else-if="msg.data.kind === 'chapter_audit'" class="msg-chapter-audit">
+        <div class="audit-header">
+          <h3>第{{ msg.data.chapter_num }}章「{{ msg.data.title }}」审计</h3>
+          <n-tag :type="msg.data.approved ? 'success' : 'error'" size="small">
+            {{ msg.data.approved ? '✅ 通过' : '❌ 打回' }}
+          </n-tag>
+          <n-tag size="small">{{ msg.data.total_quality }}/50</n-tag>
+        </div>
+        <!-- 能力矩阵 -->
+        <div v-if="Object.keys(msg.data.capability_manifest || {}).length" class="audit-section">
+          <n-collapse>
+            <n-collapse-item title="角色能力矩阵" name="cap">
+              <div v-for="(charCaps, charName) in msg.data.capability_manifest" :key="charName" class="char-block">
+                <strong class="char-name">{{ charName }}</strong>
+                <div class="cap-grid">
+                  <div v-for="(cap, capName) in charCaps" :key="capName" class="cap-cell" :style="{ borderLeftColor: capStatusColor(cap.status) }">
+                    <span class="cap-name">{{ capName }}</span>
+                    <span class="cap-scores">
+                      {{ cap.setting }}→<strong :style="{ color: capStatusColor(cap.status) }">{{ cap.actual }}</strong>
+                    </span>
+                    <span v-if="cap.status !== 'pass'" class="cap-status" :style="{ color: capStatusColor(cap.status) }">{{ cap.status }}</span>
+                  </div>
+                </div>
+              </div>
+            </n-collapse-item>
+          </n-collapse>
+        </div>
+        <!-- 质量评分 -->
+        <div class="audit-section quality-section">
+          <div v-for="(score, dim) in msg.data.quality_scores" :key="dim" class="quality-row">
+            <span class="dim-label">{{ dim }}</span>
+            <div class="quality-bar" :style="{ width: (score * 10) + '%', background: qualityColor(score) }"></div>
+            <span class="score-val" :style="{ color: qualityColor(score) }">{{ score }}</span>
+          </div>
+        </div>
+        <!-- 问题列表 -->
+        <div v-if="msg.data.issues && msg.data.issues.length" class="audit-section">
+          <div v-for="(issue, idx) in msg.data.issues" :key="idx" class="issue-item" :style="{ borderLeftColor: severityColor(issue.severity) }">
+            <n-tag :bordered="false" size="tiny" :style="{ background: severityColor(issue.severity), color: '#fff' }">{{ issue.severity }}</n-tag>
+            <span class="issue-type">{{ issue.type }}</span>
+            <p class="issue-detail">{{ issue.detail }}</p>
+            <p v-if="issue.suggestion" class="issue-suggestion">💡 {{ issue.suggestion }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Batch Audit -->
+      <BatchAuditView v-else-if="msg.data.kind === 'batch_audit'" :data="msg.data" />
+
+      <!-- Global Audit -->
+      <GlobalAuditView v-else-if="msg.data.kind === 'global_audit'" :data="msg.data" />
     </div>
   </div>
 </template>
@@ -166,4 +237,47 @@ const kindBorder: Record<string, string> = {
 .msg-refine-block { padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; max-height: 400px; overflow-y: auto; }
 .refine-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .refine-label { font-weight: 700; color: #5acea0; }
+
+/* ── 大纲审计样式（chapter_audit；batch/global 已抽至独立子组件）── */
+.msg-chapter-audit {
+  padding: 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(54,173,106,0.2);
+  border-radius: 12px; margin: 8px 0;
+}
+.msg-chapter-audit h3 {
+  font-size: 16px; color: #36ad6a; margin-bottom: 12px;
+}
+.audit-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.audit-header h3 { margin-bottom: 0; }
+.audit-section { margin-top: 12px; }
+.audit-section h4 { font-size: 14px; color: rgba(255,255,255,0.8); margin-bottom: 8px; }
+
+/* 角色能力矩阵 */
+.char-block { margin-bottom: 12px; }
+.char-name { display: block; color: #5acea0; margin-bottom: 6px; font-size: 14px; }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
+.cap-cell {
+  padding: 6px 10px; border-radius: 6px; border-left: 3px solid #36ad6a;
+  background: rgba(255,255,255,0.04); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+}
+.cap-name { font-size: 13px; color: rgba(255,255,255,0.9); }
+.cap-scores { font-size: 12px; color: rgba(255,255,255,0.6); }
+.cap-status { font-size: 11px; font-weight: 700; }
+
+/* 质量评分条 */
+.quality-section { margin-top: 8px; }
+.quality-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 13px;
+}
+.dim-label { width: 120px; color: rgba(255,255,255,0.7); text-transform: capitalize; }
+.quality-bar { height: 8px; border-radius: 4px; transition: width 0.3s; }
+.score-val { font-weight: 700; min-width: 24px; text-align: right; }
+
+/* 问题列表 */
+.issue-item {
+  padding: 8px 12px; margin-bottom: 6px; border-radius: 6px; border-left: 3px solid;
+  background: rgba(255,255,255,0.03);
+}
+.issue-type { font-size: 12px; color: rgba(255,255,255,0.5); margin-left: 8px; }
+.issue-detail { font-size: 13px; color: rgba(255,255,255,0.8); margin: 4px 0 0; }
+.issue-suggestion { font-size: 12px; color: #5acea0; margin: 4px 0 0; }
 </style>

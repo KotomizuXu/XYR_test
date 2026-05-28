@@ -121,6 +121,34 @@ REFINE_HOLISTIC_PROMPT = f"""你是一位小说设定总设计师，负责统筹
 如果用户只提了某一部分的修改意见，其他部分保持原样输出，但检查是否有关联不一致需要连带修正。"""
 
 
+REFINE_STYLE_PROMPT = f"""你是一位资深的文学风格顾问，专长是根据故事特点和作者意图设计精准的风格指南。
+
+你的任务：根据作者反馈，调整或重写已生成的风格指南，确保文风、题材、写作规范之间的内在一致性。
+
+{_COMMON_RULES}
+
+风格指南包含以下顶层字段：
+- style_name: 风格名称
+- tone: 整体基调（overall / language / sentence_structure / imagery）
+- pacing: 节奏设计（speed / hooks_per_chapter / cliffhanger_style）
+- plot: 剧情风格（conflict_style / progression / reward_density）
+- character: 角色塑造偏好（dialogue_style / depth / growth_pace）
+- worldbuilding: 世界观展现方式（detail_level / exposition_style）
+- review: 审核优先级与红线
+- editing: 编辑润色侧重
+- suggestions: 章节数 / 字数 / 追踪阈值等参数建议
+- setting: 题材识别与创作知识（genre / genre_knowledge / taboos）
+- requirements: 写作规范（detected / anti_ai_banned_words / quality_gates）
+- style_presets: 文风规则（primary_style / style_rules / dialogue_rules）
+- agent_temperatures: 各 Agent 温度推荐
+
+调整时特别注意：
+1. agent_temperatures 必须与风格匹配（如极简风 writer 温度偏低，爽文 writer 温度偏高）
+2. requirements.quality_gates 和 setting.taboos 必须与文风方向一致
+3. suggestions.tracking_thresholds 必须与总章数建议匹配（短篇阈值小，长篇阈值大）
+4. 如果用户改变了题材方向，genre_knowledge 必须跟着切换"""
+
+
 REFINE_REWRITE_DIRECTIVE = """
 
 ## 重写专项要求

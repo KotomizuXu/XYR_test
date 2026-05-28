@@ -33,6 +33,133 @@ _TITLE_PREFIX_RE = re.compile(
 class PlotAgent(BaseAgent):
     PROMPT_TEMPLATE = "plotter_system.txt"
 
+    def _validate_chapter_plan_fields(self, plan: dict) -> list[str]:
+        """验证章节计划是否包含所有必需字段，返回缺失字段列表。"""
+        required_fields = [
+            "chapter_number", "title", "summary", "plot_points", "scene_list",
+            "characters_on_stage", "emotional_arc", "tension_level",
+            "opening_hook_type", "ending_hook_type", "foreshadowing",
+            "active_plotlines", "act", "location", "time", "duration",
+        ]
+        return [f for f in required_fields if f not in plan]
+
+    def regenerate_chapters(
+        self,
+        chapter_plans: list[dict],
+        target_chapters: list[int],
+        audit_feedback: str,
+        old_plans: list[dict],
+        world: dict,
+        outline: dict,
+        style_guide: dict | None = None,
+    ) -> list[dict]:
+        """重写指定章节的计划，基于审计反馈修复问题。
+
+        对齐 Writer.rewrite() 的 6 项机制：
+        1. 温度提升 +0.25（上限 0.95）
+        2. 7 条重写规则写在 user_msg
+        3. 跳过（使用独立 prompt 文件）
+        4. 上下文截断 plotter_rewrite_ctx_cap = 10000
+        5. JSON 字段完整性校验
+        6. 每轮保存文件由调用方负责
+        """
+        # 加载重写专用 system prompt
+        rewrite_prompt_path = PROMPTS_DIR / "outline_rewrite_system.txt"
+        if rewrite_prompt_path.exists():
+            system = rewrite_prompt_path.read_text(encoding="utf-8")
+        else:
+            system = self.apply_style(self.system_prompt, style_guide)
+
+        # 构建重写上下文
+        world_str = json.dumps(world, ensure_ascii=False, indent=2)
+        outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
+
+        # 上下文截断（对齐 Writer.rewrite 的 rewrite_ctx_cap）
+        ctx_cap = self.config.get("outline_audit", {}).get("plotter_rewrite_ctx_cap", 10000)
+        existing_summaries = self._build_existing_summaries(chapter_plans)
+        if len(existing_summaries) > ctx_cap:
+            existing_summaries = existing_summaries[:ctx_cap] + "\n...(摘要已截断)"
+
+        # 温度提升（对齐 Writer.rewrite 的 +0.25）
+        base_temp = self._temperature()
+        boost = self.config.get("outline_audit", {}).get("rewrite_temperature_boost", 0.25)
+        rewrite_temp = min(base_temp + boost, 0.95)
+
+        # 7 条重写规则（对齐 Writer.rewrite 的规则列表）
+        rewrite_rules = (
+            "## 重写要求\n"
+            "请针对审计反馈中指出的每一个问题进行实质性修改。具体要求：\n"
+            "1. 对 major 级别问题：必须大幅重写相关情节点，不能只改几个词或做表面调整\n"
+            "2. 对 warning 级别问题：必须有可感知的改善，不能原样保留\n"
+            "3. 如果审计指出\"能力超标\"：必须降低角色在该能力域的表现，或增加合理的铺垫解释\n"
+            "4. 如果审计指出\"世界规则违反\"：必须修改情节使其符合已建立的世界观规则\n"
+            "5. 如果审计指出\"伏笔断裂\"：必须补充 planted/revealed 的对应关系\n"
+            "6. 保留质量评分 ≥ 7 的维度，不要为了修复问题而破坏原有的好设计\n"
+            "7. 输出完整的章节计划 JSON，不要省略任何字段"
+        )
+
+        # 为每个目标章节构建重写请求
+        rewritten_plans = []
+        for target_ch_num, old_plan in zip(target_chapters, old_plans):
+            # 获取邻居章节（前一章和后一章）
+            prev_plan = next((p for p in chapter_plans if p.get("chapter_number") == target_ch_num - 1), None)
+            next_plan = next((p for p in chapter_plans if p.get("chapter_number") == target_ch_num + 1), None)
+
+            # 构建 user_msg
+            user_msg = f"## 世界观设定\n{world_str}\n\n"
+            user_msg += f"## 故事大纲\n{outline_str}\n\n"
+            user_msg += f"## 前后章节摘要（保持连贯，上限 {ctx_cap} 字符）\n{existing_summaries}\n\n"
+
+            if prev_plan:
+                user_msg += f"## 前一章计划（第{target_ch_num - 1}章）\n"
+                user_msg += json.dumps(prev_plan, ensure_ascii=False, indent=2) + "\n\n"
+
+            if next_plan:
+                user_msg += f"## 后一章计划（第{target_ch_num + 1}章）\n"
+                user_msg += json.dumps(next_plan, ensure_ascii=False, indent=2) + "\n\n"
+
+            user_msg += f"## 旧版计划（第{target_ch_num}章，用户不满意，请勿沿用此方向）\n"
+            user_msg += json.dumps(old_plan, ensure_ascii=False, indent=2) + "\n\n"
+
+            user_msg += f"## 审计反馈（必须修复以下问题）\n{audit_feedback}\n\n"
+            user_msg += rewrite_rules
+
+            # 调用 LLM 重写
+            logger.info(f"Plotter: rewriting chapter {target_ch_num} (temp={rewrite_temp:.2f})...")
+
+            for attempt in range(2):  # 最多重试 1 次
+                new_plan = self.llm.chat_json(system, user_msg, temperature=rewrite_temp)
+
+                if not isinstance(new_plan, dict):
+                    logger.warning(f"Plotter: rewrite returned non-dict for chapter {target_ch_num} (attempt {attempt+1})")
+                    continue
+
+                # 输出校验：检查必需字段（对齐 Writer.rewrite 的字数校验）
+                missing_fields = self._validate_chapter_plan_fields(new_plan)
+                if missing_fields and attempt == 0:
+                    logger.warning(
+                        f"Plotter: rewritten chapter {target_ch_num} missing fields: {missing_fields}, retrying..."
+                    )
+                    retry_msg = user_msg + f"\n\n注意：上次输出缺少以下字段：{missing_fields}，请确保输出完整的 JSON。"
+                    continue
+
+                # 清洗标题（复用现有逻辑）
+                if "title" in new_plan:
+                    new_plan["title"] = self._sanitize_title(new_plan["title"])
+
+                # 确保 chapter_number 正确
+                new_plan["chapter_number"] = target_ch_num
+
+                rewritten_plans.append(new_plan)
+                logger.info(f"Plotter: chapter {target_ch_num} rewritten successfully")
+                break
+            else:
+                # 两次都失败，保留旧版本
+                logger.error(f"Plotter: failed to rewrite chapter {target_ch_num}, keeping old version")
+                rewritten_plans.append(old_plan)
+
+        return rewritten_plans
+
     def run(
         self,
         outline: dict,
@@ -80,9 +207,10 @@ class PlotAgent(BaseAgent):
                         existing_summaries=existing_summaries,
                         volume_context=f"本批次属于卷{vol.number}「{vol.title}」（第{vol.start_chapter}-{vol.end_chapter}章）。本批次第{end}章是本卷最后一章，请给出有分量的卷末收束。" if end == vol.end_chapter else f"本批次属于卷{vol.number}「{vol.title}」（第{vol.start_chapter}-{vol.end_chapter}章）。",
                     )
+                    batch_start_idx = len(all_plans)
                     all_plans.extend(batch)
                     if on_batch_complete:
-                        on_batch_complete(all_plans)
+                        on_batch_complete(all_plans, batch_start_idx, batch)
         else:
             start = completed + 1
             while start <= num_chapters:
@@ -95,9 +223,10 @@ class PlotAgent(BaseAgent):
                     system, world_str, outline_str, start, end, num_chapters,
                     existing_summaries=existing_summaries,
                 )
+                batch_start_idx = len(all_plans)
                 all_plans.extend(batch)
                 if on_batch_complete:
-                    on_batch_complete(all_plans)
+                    on_batch_complete(all_plans, batch_start_idx, batch)
                 start += BATCH_SIZE
 
         logger.info(f"Plotter: done. {len(all_plans)} chapters planned.")

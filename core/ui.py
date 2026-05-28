@@ -110,6 +110,39 @@ def show_novel_list(rows):
 
 
 # ---------------------------------------------------------------------------
+# 大纲审计（Plotting 阶段 Engine A→D 输出）
+# ---------------------------------------------------------------------------
+
+def show_chapter_audit(chapter_num, title, audit_report):
+    """单章审计结果可视化（Engine B+C 输出）。"""
+    _send_output("chapter_audit",
+                 chapter_num=chapter_num,
+                 title=title,
+                 capability_manifest=audit_report.get("capability_manifest", {}),
+                 issues=audit_report.get("issues", []),
+                 quality_scores=audit_report.get("quality_scores", {}),
+                 total_quality=audit_report.get("total_quality", 0),
+                 approved=audit_report.get("approved", False))
+
+
+def show_batch_audit(batch_range, summary):
+    """批次级审计汇总（Engine D1+D2 输出）。"""
+    _send_output("batch_audit",
+                 batch_range=batch_range,
+                 forgotten_elements=summary.get("forgotten_elements", {}),
+                 pacing_curve=summary.get("pacing_curve", {}),
+                 relationship_summary=summary.get("relationship_summary", []))
+
+
+def show_global_audit(completeness_report):
+    """全局级审计（Engine D3+D4 完结报告）。"""
+    _send_output("global_audit",
+                 completeness=completeness_report.get("completeness", {}),
+                 cross_batch_issues=completeness_report.get("cross_batch_issues", []),
+                 coverage_rate=completeness_report.get("coverage_rate", {}))
+
+
+# ---------------------------------------------------------------------------
 # 章节进度
 # ---------------------------------------------------------------------------
 

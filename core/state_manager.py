@@ -67,6 +67,11 @@ class NovelState:
     # Why: 300 章场景下，章节摘要必须再聚合为卷级，避免 running_context 线性膨胀。
     # 持久化到 state，避免每次续写都重新调用 LLM 重生成。
     volume_summaries: dict | None = None
+    # 大纲审计数据（Plotting 阶段 Engine A→D 输出）
+    capability_matrix: dict | None = None  # Engine A: 角色能力矩阵 + 世界规则 + 地点约束
+    chapter_audits: list = field(default_factory=list)  # Engine B+C: 每章交叉校验结果
+    batch_audits: list = field(default_factory=list)  # Engine D1+D2: 每批次遗忘/节奏审计
+    global_audit: dict | None = None  # Engine D3+D4: 全局完整性 + 跨批次一致性
 
     def __post_init__(self):
         if not self.created_at:

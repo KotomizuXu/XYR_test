@@ -8,6 +8,8 @@ import ParamTable from '../components/display/ParamTable.vue'
 import ProgressBar from '../components/display/ProgressBar.vue'
 import JsonViewer from '../components/display/JsonViewer.vue'
 import RefineBlockViewer from '../components/display/RefineBlockViewer.vue'
+import BatchAuditView from '../components/display/BatchAuditView.vue'
+import GlobalAuditView from '../components/display/GlobalAuditView.vue'
 
 const store = useNovelStore()
 const route = useRoute()
@@ -19,6 +21,7 @@ const isStandalone = computed(() => !!route.params.name)
 const detail = ref<any>(null)
 const loading = ref(false)
 const activeTab = ref('styling')
+const refreshing = ref(false)
 
 const PHASE_ORDER = [
   'styling', 'collecting_params', 'directing', 'plotting',
@@ -79,6 +82,15 @@ const mergedChapters = computed(() => {
     const plan = planMap.get(ch.number)
     return plan ? { ...ch, plan } : { ...ch }
   })
+})
+
+const auditByChapter = computed(() => {
+  const audits = detail.value?.chapter_audits || []
+  const map = new Map<number, any>()
+  for (const a of audits) {
+    map.set(a.chapter_number, a)
+  }
+  return map
 })
 
 // Drawer for chapter content
@@ -186,6 +198,12 @@ async function fetchDetail() {
     const res = await fetch(`/api/novels/${encodeURIComponent(name)}`)
     if (res.ok) detail.value = await res.json()
   } catch { /* novel may not exist yet */ }
+}
+
+async function handleRefresh() {
+  refreshing.value = true
+  await fetchDetail()
+  refreshing.value = false
 }
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -333,7 +351,10 @@ const directingContent = computed(() => {
         <n-gi :span="hasSession ? 14 : 24">
           <n-tabs v-model:value="activeTab" type="line" animated>
         <n-tab-pane name="styling" :tab="phaseLabel.styling" :disabled="phaseState('styling') === 'future'">
-          <n-card v-if="phaseState('styling') !== 'future' && detail?.style_guide" size="small">
+          <n-card v-if="phaseState('styling') !== 'future' && detail?.style_guide" size="small" :title="phaseLabel.styling">
+            <template #header-extra>
+              <n-button size="small" @click="handleRefresh" :loading="refreshing">刷新数据</n-button>
+            </template>
             <n-text v-if="detail.style_description" depth="3" style="margin-bottom: 8px; display: block;">{{ detail.style_description }}</n-text>
             <JsonViewer :data="detail.style_guide" type="style" />
           </n-card>
@@ -342,14 +363,19 @@ const directingContent = computed(() => {
         </n-tab-pane>
 
         <n-tab-pane name="collecting_params" :tab="phaseLabel.collecting_params" :disabled="phaseState('collecting_params') === 'future'">
-          <n-card v-if="phaseState('collecting_params') !== 'future' && detail?.novel_params" size="small">
-            <template v-if="phaseState('collecting_params') === 'past'" #header-extra>
-              <n-popconfirm @positive-click="rollbackToPhase('collecting_params')">
-                <template #trigger>
-                  <n-button size="small" type="warning" :loading="rollbackLoading === 'collecting_params'" :disabled="hasSession">回滚到此阶段</n-button>
+          <n-card v-if="phaseState('collecting_params') !== 'future' && detail?.novel_params" size="small" :title="phaseLabel.collecting_params">
+            <template #header-extra>
+              <n-space>
+                <n-button size="small" @click="handleRefresh" :loading="refreshing">刷新数据</n-button>
+                <template v-if="phaseState('collecting_params') === 'past'">
+                  <n-popconfirm @positive-click="rollbackToPhase('collecting_params')">
+                    <template #trigger>
+                      <n-button size="small" type="warning" :loading="rollbackLoading === 'collecting_params'" :disabled="hasSession">回滚到此阶段</n-button>
+                    </template>
+                    回滚将清除此后所有阶段的数据（导演、剧情、正文等），确定继续？
+                  </n-popconfirm>
                 </template>
-                回滚将清除此后所有阶段的数据（导演、剧情、正文等），确定继续？
-              </n-popconfirm>
+              </n-space>
             </template>
             <n-descriptions bordered :column="2">
               <n-descriptions-item label="总章数">{{ detail.total_chapters || '?' }}</n-descriptions-item>
@@ -365,14 +391,19 @@ const directingContent = computed(() => {
         </n-tab-pane>
 
         <n-tab-pane name="directing" :tab="phaseLabel.directing" :disabled="phaseState('directing') === 'future'">
-          <n-card v-if="phaseState('directing') !== 'future' && (detail?.world_data || detail?.outline)" size="small">
-            <template v-if="phaseState('directing') === 'past'" #header-extra>
-              <n-popconfirm @positive-click="rollbackToPhase('directing')">
-                <template #trigger>
-                  <n-button size="small" type="warning" :loading="rollbackLoading === 'directing'" :disabled="hasSession">回滚到此阶段</n-button>
+          <n-card v-if="phaseState('directing') !== 'future' && (detail?.world_data || detail?.outline)" size="small" :title="phaseLabel.directing">
+            <template #header-extra>
+              <n-space>
+                <n-button size="small" @click="handleRefresh" :loading="refreshing">刷新数据</n-button>
+                <template v-if="phaseState('directing') === 'past'">
+                  <n-popconfirm @positive-click="rollbackToPhase('directing')">
+                    <template #trigger>
+                      <n-button size="small" type="warning" :loading="rollbackLoading === 'directing'" :disabled="hasSession">回滚到此阶段</n-button>
+                    </template>
+                    回滚将清除此后所有阶段的数据（剧情拆章、正文等），确定继续？
+                  </n-popconfirm>
                 </template>
-                回滚将清除此后所有阶段的数据（剧情拆章、正文等），确定继续？
-              </n-popconfirm>
+              </n-space>
             </template>
             <RefineBlockViewer v-if="directingContent" :content="directingContent" :bare="true" />
           </n-card>
@@ -382,15 +413,22 @@ const directingContent = computed(() => {
 
         <n-tab-pane name="plotting" :tab="phaseLabel.plotting" :disabled="phaseState('plotting') === 'future'">
           <template v-if="phaseState('plotting') !== 'future' && detail?.chapters?.length">
-            <!-- Rollback button -->
-            <n-space v-if="phaseState('plotting') === 'past'" justify="end" style="margin-bottom: 8px">
-              <n-popconfirm @positive-click="rollbackToPhase('plotting')">
+            <!-- Refresh + rollback buttons -->
+            <n-space justify="end" style="margin-bottom: 8px">
+              <n-button size="small" @click="handleRefresh" :loading="refreshing">刷新数据</n-button>
+              <n-popconfirm v-if="phaseState('plotting') === 'past'" @positive-click="rollbackToPhase('plotting')">
                 <template #trigger>
                   <n-button size="small" type="warning" :loading="rollbackLoading === 'plotting'" :disabled="hasSession">回滚到此阶段</n-button>
                 </template>
                 回滚将清除此后所有阶段的数据（正文、追踪等），确定继续？
               </n-popconfirm>
             </n-space>
+            <!-- 大纲查看入口（复用 directing Tab 的 RefineBlockViewer 渲染 outline）-->
+            <n-collapse v-if="detail?.outline" style="margin-bottom: 12px">
+              <n-collapse-item title="📖 查看大纲" name="outline">
+                <RefineBlockViewer :content="{ outline: detail.outline }" :bare="true" />
+              </n-collapse-item>
+            </n-collapse>
             <!-- Has chapter_plans: show full outline -->
             <template v-if="detail.chapter_plans?.length">
               <template v-if="groupedChapters">
@@ -471,6 +509,36 @@ const directingContent = computed(() => {
                     <n-collapse-item v-if="ch.plan.active_plotlines?.length" title="活跃主线" name="plotlines">
                       <n-tag v-for="pl in ch.plan.active_plotlines" :key="pl" size="small" style="margin:2px">{{ pl }}</n-tag>
                     </n-collapse-item>
+                    <n-collapse-item v-if="auditByChapter.get(ch.number)" title="🔍 审计结果" name="audit">
+                      <template v-if="auditByChapter.get(ch.number)">
+                        <n-space align="center" :size="8" style="margin-bottom:8px">
+                          <n-tag :type="auditByChapter.get(ch.number).approved ? 'success' : 'error'" size="small">
+                            {{ auditByChapter.get(ch.number).approved ? '✅ 通过' : '❌ 打回' }}
+                          </n-tag>
+                          <n-tag size="small">{{ auditByChapter.get(ch.number).total_quality }}/50</n-tag>
+                        </n-space>
+                        <!-- 能力矩阵摘要 -->
+                        <div v-if="Object.keys(auditByChapter.get(ch.number).capability_manifest || {}).length" style="margin-bottom:8px">
+                          <n-text depth="3" style="font-size:12px">角色能力表现：</n-text>
+                          <div v-for="(charCaps, charName) in auditByChapter.get(ch.number).capability_manifest" :key="charName" style="margin-top:4px">
+                            <n-text style="font-size:12px;font-weight:700">{{ charName }}：</n-text>
+                            <n-tag v-for="(cap, capName) in charCaps" :key="capName" size="tiny"
+                              :type="cap.status === 'major' ? 'error' : cap.status === 'warning' ? 'warning' : 'success'"
+                              style="margin:2px">
+                              {{ capName }}: {{ cap.setting }}→{{ cap.actual }}
+                            </n-tag>
+                          </div>
+                        </div>
+                        <!-- 问题摘要 -->
+                        <div v-if="auditByChapter.get(ch.number).issues?.length">
+                          <n-text depth="3" style="font-size:12px">问题 ({{ auditByChapter.get(ch.number).issues.length }})：</n-text>
+                          <div v-for="(issue, idx) in auditByChapter.get(ch.number).issues" :key="idx" style="font-size:12px;margin-top:2px">
+                            <n-tag :type="issue.severity === 'major' ? 'error' : issue.severity === 'warning' ? 'warning' : 'info'" size="tiny">{{ issue.severity }}</n-tag>
+                            {{ issue.detail }}
+                          </div>
+                        </div>
+                      </template>
+                    </n-collapse-item>
                   </n-collapse>
                 </template>
               </n-card>
@@ -497,20 +565,34 @@ const directingContent = computed(() => {
                 </n-list-item>
               </n-list>
             </n-card>
+            <!-- 批次审计 + 全局审计持久化展示 -->
+            <n-collapse v-if="(detail?.batch_audits?.length || detail?.global_audit)" style="margin-top: 12px">
+              <n-collapse-item v-if="detail?.batch_audits?.length" title="📊 批次审计汇总" name="batch_audits">
+                <BatchAuditView v-for="(b, idx) in detail.batch_audits" :key="idx" :data="b" />
+              </n-collapse-item>
+              <n-collapse-item v-if="detail?.global_audit" title="📋 全书完整性报告" name="global_audit">
+                <GlobalAuditView :data="detail.global_audit" />
+              </n-collapse-item>
+            </n-collapse>
           </template>
           <n-text v-else-if="phaseState('plotting') === 'current' && hasSession" depth="3" class="tab-placeholder">进行中...</n-text>
           <n-text v-else depth="3" class="tab-placeholder">此阶段尚未开始</n-text>
         </n-tab-pane>
 
         <n-tab-pane name="writing" :tab="phaseLabel.writing" :disabled="phaseState('writing') === 'future'">
-          <n-card v-if="phaseState('writing') !== 'future' && detail?.chapters?.length" size="small">
-            <template v-if="phaseState('writing') === 'past'" #header-extra>
-              <n-popconfirm @positive-click="rollbackToPhase('writing')">
-                <template #trigger>
-                  <n-button size="small" type="warning" :loading="rollbackLoading === 'writing'" :disabled="hasSession">回滚到此阶段</n-button>
+          <n-card v-if="phaseState('writing') !== 'future' && detail?.chapters?.length" size="small" :title="phaseLabel.writing">
+            <template #header-extra>
+              <n-space>
+                <n-button size="small" @click="handleRefresh" :loading="refreshing">刷新数据</n-button>
+                <template v-if="phaseState('writing') === 'past'">
+                  <n-popconfirm @positive-click="rollbackToPhase('writing')">
+                    <template #trigger>
+                      <n-button size="small" type="warning" :loading="rollbackLoading === 'writing'" :disabled="hasSession">回滚到此阶段</n-button>
+                    </template>
+                    回滚将清除所有章节内容和追踪数据，重新开始写作，确定继续？
+                  </n-popconfirm>
                 </template>
-                回滚将清除所有章节内容和追踪数据，重新开始写作，确定继续？
-              </n-popconfirm>
+              </n-space>
             </template>
             <template v-if="groupedChapters">
               <div v-for="vol in groupedChapters" :key="vol.number">
