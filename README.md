@@ -2,7 +2,7 @@
 
 基于多 Agent 协作的 AI 小说生成系统。10 个专职 Agent 模拟真实出版流程，从风格分析到最终润色，全自动完成小说创作（含拆章后的大纲审计自动重写闭环）。
 
-> **AI 协作者请先读 [`docs/execution_execution_workflow.md`](docs/execution_execution_workflow.md)** —— 它定义了接到需求时的执行流程（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）。本项目要求每次代码变更后**同步更新所有受影响文档**（parameters / self_check / flowchart / requirements / README），execution_workflow.md 里有完整的同步矩阵。
+> **AI 协作者请先读 [`docs/execution_workflow.md`](docs/execution_workflow.md)** —— 它定义了接到需求时的执行流程（对齐 → 拆任务 → 实现 → 验证 → 文档同步 → 回告）。本项目要求每次代码变更后**同步更新所有受影响文档**（parameters / self_check / flowchart / requirements / README），execution_workflow.md 里有完整的同步矩阵。
 
 ## 架构设计
 
@@ -94,7 +94,7 @@ api:
 ### 3. 启动 Web 界面
 
 ```bash
-python3 web_main.py
+py -3.10 web_main.py
 ```
 
 浏览器访问 `http://localhost:8000`，通过 Web 界面进行所有操作（创建小说、继续创作、修订章节）。
@@ -235,6 +235,23 @@ Orchestra/
 - 建议先用短篇（1-3章）跑一轮测试效果
 
 ## 变更日志
+
+### 2026-05-29 全量自检修复
+
+- 修复 5 个严重 Bug：审计精修返回值丢弃、batch_size 硬编码、validation_rules 覆盖、禁用词过激替换、前端 allow_custom 未实现
+- 修复 13 个警告：三阶段 try/except 保护、refining 兼容、chapters 越界保护、审计 Agent 温度配置、追踪系统 characterGroups/支线检测/遗忘检测/validation_rules 初始化、前后端 PHASE_ORDER/ParamTable 对齐
+- 清理 ~400 行旧增量导演流程死代码
+- 同步更新 6 份文档
+
+### 2026-05-29 第二轮优化
+
+- `_GENRE_STRICTNESS` 硬编码字典迁移至 config.yaml `genre_strictness` 段
+- `get_tracking_context` 截断改为按 section 粒度智能截断
+- `analyze_development` 优化为单次读写，减少 4 次磁盘 I/O
+- 伏笔检测修复 `planted_ch=0` 被 falsy 跳过的问题
+- `query_relevant` 添加 4000 字符长度兜底
+- 删除 `show_novel_list` 死代码路径
+- 前端补充渲染：progress.info / param_confirmed.thresholds / batch_audit.relationship_summary
 
 ### 2026-05-29 审校环节静默跳过 bug 修复
 

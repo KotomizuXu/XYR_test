@@ -44,9 +44,16 @@ agents:
     temperature: 0.3
   critic:
     temperature: 0.5
+  capability_extractor:
+    temperature: 0.5
+  outline_auditor:
+    temperature: 0.3
+  outline_global_checker:
+    temperature: 0.3
 
 # 大纲审计配置（Plotting 阶段 Engine A→D）
 outline_audit:
+  batch_size: 5                 # 每批审计章节数（默认复用 Plotter BATCH_SIZE）
   audit_max_retries: 2           # Engine B+C 审核不通过时最多重试次数（从1提升到2，给重写循环更多机会）
   stale_similarity_threshold: 0.92  # 相似度检测阈值（>0.92 判定为 stale，触发升温重写）
   auto_rewrite: true             # true=自动重写不通过章节；false=只展示审计结果不自动重写
@@ -65,3 +72,8 @@ outline_audit:
     max_consecutive_low: 3       # 连续低张力章节上限
     max_same_emotion: 4          # 连续相同情绪类型上限
   forgotten_check: true          # Engine D1: 是否启用遗忘曲线检测（阈值复用 style_guide.suggestions.tracking_thresholds）
+
+# 题材 → 审核严格度映射（key 为题材关键词，value 为 strict/flexible）
+genre_strictness:
+  strict: ["悬疑", "推理", "历史", "严肃", "科幻"]
+  flexible: ["爽文", "复仇", "言情", "甜文", "虐文", "网文", "玄幻", "仙侠", "武侠", "奇幻", "都市"]

@@ -158,6 +158,10 @@ async def rollback_novel(novel_name: str, req: RollbackRequest):
     if not state:
         return {"error": "Novel not found"}
 
+    # 兼容旧 state：refining 已合并入 directing
+    if state.phase == "refining":
+        state.phase = "directing"
+
     cur_idx = _PHASE_ORDER.index(state.phase) if state.phase in _PHASE_ORDER else 0
     tgt_idx = _PHASE_ORDER.index(target)
     if tgt_idx >= cur_idx:

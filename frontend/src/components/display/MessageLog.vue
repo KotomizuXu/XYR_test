@@ -84,6 +84,7 @@ function qualityColor(score: number): string {
           :indicator-placement="'inside'"
         />
         <span class="progress-label">{{ msg.data.label }} ({{ msg.data.current }}/{{ msg.data.total }})</span>
+        <span v-if="msg.data.info" class="progress-info">{{ msg.data.info }}</span>
       </div>
 
       <!-- Completion -->
@@ -137,6 +138,11 @@ function qualityColor(score: number): string {
         <n-space>
           <n-tag>章数: {{ msg.data.total_chapters }}</n-tag>
           <n-tag>字数: {{ msg.data.words_min }}-{{ msg.data.words_max }}</n-tag>
+          <template v-if="msg.data.thresholds">
+            <n-tag>角色遗忘阈值: {{ msg.data.thresholds.character }}章</n-tag>
+            <n-tag>支线阈值: {{ msg.data.thresholds.plotline }}章</n-tag>
+            <n-tag>伏笔阈值: {{ msg.data.thresholds.foreshadowing }}章</n-tag>
+          </template>
         </n-space>
       </div>
 

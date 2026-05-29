@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .state_manager import atomic_write_json
+from .state_manager import VolumeDef, atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +241,10 @@ class Tracker:
         config = self._read_json("config.json")
         if "thresholds" not in config:
             config["thresholds"] = {}
+        if "retired" not in config:
+            config["retired"] = {"characters": [], "plotlines": [], "foreshadowing": []}
+        if "strictness" not in config:
+            config["strictness"] = "strict"
         config["thresholds"][element_type] = value
         self._write_json("config.json", config)
 
@@ -537,7 +541,6 @@ class Tracker:
 
     def advance_volume(self, chapter_num: int, volumes: list) -> None:
         """检查当前章节是否到达卷末边界，更新 plot_tracker 中的卷信息。"""
-        from core.state_manager import VolumeDef
         tracker = self._read_json("plot_tracker.json")
         for vol in volumes:
             if chapter_num == vol.end_chapter:
@@ -747,6 +750,7 @@ class Tracker:
                     "time_estimate": "5-10分钟",
                 },
             },
+            "active_validation_level": "standard",
         }
         self._write_json("validation_rules.json", rules)
 
@@ -1034,6 +1038,24 @@ class Tracker:
         if len(warnings) > 30:
             char_state["consistency"]["warnings"] = warnings[-30:]
 
+        # Maintain characterGroups: move long-absent characters from active to inactive
+        groups = char_state.setdefault("characterGroups", {})
+        active_list = groups.get("active", [])
+        inactive_list = groups.get("inactive", [])
+        thresholds = self._get_thresholds()
+        moved = []
+        for name in list(active_list):
+            char_data = char_state.get("supportingCharacters", {}).get(name, {})
+            last_seen = char_data.get("status", {}).get("lastSeen", {}).get("chapter") or 0
+            if (chapter_num - last_seen) >= thresholds.get("character", 10) and last_seen > 0:
+                active_list.remove(name)
+                if name not in inactive_list:
+                    inactive_list.append(name)
+                moved.append(name)
+        if moved:
+            groups["active"] = active_list
+            groups["inactive"] = inactive_list
+
         self._write_json("character_state.json", char_state)
 
         # --- L1.1: Consume reviewer output ---
@@ -1168,7 +1190,7 @@ class Tracker:
         protag = char_state.get("protagonist", {})
         protag_name = protag.get("name", "")
         protag_ch = protag.get("currentStatus", {}).get("chapter") or 0
-        if protag_name and protag_ch > 0 and (current_chapter - protag_ch) >= thresholds["character"]:
+        if protag_name and (current_chapter - protag_ch) >= thresholds["character"]:
             forgotten["characters"].append({
                 "name": protag_name,
                 "role": "主角",
@@ -1184,12 +1206,12 @@ class Tracker:
             if importance == "low":
                 continue
             last_seen = data.get("status", {}).get("lastSeen", {}).get("chapter") or 0
-            if last_seen > 0 and (current_chapter - last_seen) >= thresholds["character"]:
+            if (current_chapter - last_seen) >= thresholds["character"]:
                 forgotten["characters"].append({
                     "name": name,
                     "role": data.get("role", ""),
-                    "last_seen": last_seen,
-                    "chapters_absent": current_chapter - last_seen,
+                    "last_seen": last_seen if last_seen > 0 else 0,
+                    "chapters_absent": current_chapter if last_seen == 0 else current_chapter - last_seen,
                 })
 
         # Stale plotlines
@@ -1200,11 +1222,13 @@ class Tracker:
             if subplot.get("status") in ("completed", "abandoned"):
                 continue
             last_node = subplot.get("currentNode", "")
-            if not last_node:
+            last_update = subplot.get("lastUpdatedChapter") or 0
+            if not last_node or (last_update > 0 and (current_chapter - last_update) >= thresholds["plotline"]):
                 forgotten["plotlines"].append({
                     "name": subplot.get("name", ""),
                     "status": subplot.get("status", ""),
                     "description": subplot.get("description", ""),
+                    "last_seen_chapter": last_update,
                 })
 
         # Stale foreshadowing
@@ -1215,7 +1239,7 @@ class Tracker:
                 continue
             planted = fs.get("planted", {})
             planted_ch = planted.get("chapter") if isinstance(planted, dict) else planted
-            if planted_ch and fs.get("status") == "planted":
+            if planted_ch is not None and fs.get("status") == "planted":
                 if (current_chapter - planted_ch) >= thresholds["foreshadowing"]:
                     forgotten["foreshadowing"].append({
                         "id": fs.get("id", ""),
@@ -1272,24 +1296,24 @@ class Tracker:
         "措手不及": "没反应过来", "无地自容": "尴尬死了",
         "极其": "很", "万分": "特别", "异常": "很",
         "颇为": "挺", "甚为": "很", "尤为": "特别", "格外": "特别",
-        "然而": "但是", "殊不知": "", "岂料": "没想到",
+        "殊不知": "", "岂料": "没想到",
         "不料": "没想到", "谁知": "没想到",
         "面面相觑": "你看看我我看看你", "目瞪口呆": "愣住了",
         "心照不宣": "谁都没说但都懂",
         "一言难尽": "说来话长",
         # audit-config connector_phrases
-        "首先": "", "其次": "", "再次": "", "在某种程度上": "",
-        "在当下": "", "随着": "",
+        "在某种程度上": "",
+        "在当下": "",
         # writer/editor common AI clichés (synced from prompts)
-        "唯一的": "只有一点", "直到": "等到", "弥漫着": "有股",
+        "唯一的": "只有一点", "弥漫着": "有股",
         "摇摇欲坠": "晃动", "空气凝固": "沉默", "话音未落": "",
-        "猛地": "突然", "不禁": "", "顿时": "立刻",
+        "猛地": "突然", "顿时": "立刻",
         "心中暗想": "", "皱起眉头": "皱眉", "叹了口气": "叹气",
         # editor A5 expanded words
         "此外": "", "值得注意的是": "", "需要强调的是": "",
         "不可忽视": "", "彰显": "显出", "诠释": "表达",
         "赋能": "", "油然而生": "", "心潮澎湃": "",
-        "这一刻": "", "仿佛": "像", "宛如": "如同",
+        "这一刻": "",
     }
 
     # Empty phrases from audit-config.json
@@ -1651,7 +1675,6 @@ class Tracker:
         # Write protagonist analysis
         protag_analysis = result.get("protagonist_analysis", {})
         if protag_analysis and char_state.get("protagonist"):
-            char_state = self._read_json("character_state.json")
             dev = char_state["protagonist"].setdefault("development", {})
             if protag_analysis.get("currentPhase"):
                 dev["currentPhase"] = protag_analysis["currentPhase"]
@@ -1666,14 +1689,12 @@ class Tracker:
                         existing.append(m_str)
                 dev["milestones"] = existing
             char_state["lastUpdated"] = now
-            self._write_json("character_state.json", char_state)
 
         # Write supporting analysis
         for sup_analysis in result.get("supporting_analysis", []):
             name = sup_analysis.get("name", "")
             if not name:
                 continue
-            char_state = self._read_json("character_state.json")
             sup_data = char_state.get("supportingCharacters", {}).get(name)
             if sup_data:
                 if sup_analysis.get("arc_current"):
@@ -1681,12 +1702,14 @@ class Tracker:
                 if sup_analysis.get("motivations"):
                     sup_data["motivations"] = sup_analysis["motivations"]
                 char_state["lastUpdated"] = now
-                self._write_json("character_state.json", char_state)
+
+        # Batch write char_state once
+        if protag_analysis and char_state.get("protagonist") or result.get("supporting_analysis"):
+            self._write_json("character_state.json", char_state)
 
         # Write plot prediction
         plot_pred = result.get("plot_prediction", {})
         if plot_pred.get("plannedClimax"):
-            plot_tracker = self._read_json("plot_tracker.json")
             plot_tracker.setdefault("plotlines", {}).setdefault("main", {})["plannedClimax"] = {
                 "chapter": plot_pred["plannedClimax"].get("chapter"),
                 "description": plot_pred["plannedClimax"].get("reason", ""),
@@ -1939,7 +1962,13 @@ class Tracker:
         # 字符上限：调用方传入优先，否则使用历史默认 15000（保留旧行为）
         cap = max_chars if max_chars is not None else 15000
         if cap > 0 and len(result) > cap:
-            result = result[:cap] + "\n\n...(追踪数据已截断，仅保留最近内容)"
+            # 按 ## 段落截断，保证最后一个 section 完整
+            last_section = result.rfind("\n## ", 0, cap)
+            if last_section > cap // 2:
+                result = result[:last_section].rstrip()
+            else:
+                result = result[:cap].rstrip()
+            result += "\n\n...(追踪数据已截断，仅保留前面内容)"
         return result
 
     def query_relevant(self, plan: dict, current_chapter: int, top_k: int = 8) -> str:
@@ -2015,4 +2044,8 @@ class Tracker:
         picked = [line for _, line in scored[:top_k]]
         if not picked:
             return ""
-        return "## 相关锚点（按本章计划检索）\n" + "\n".join(picked)
+        result = "## 相关锚点（按本章计划检索）\n" + "\n".join(picked)
+        # 长度兜底：防止 top_k 条累加过长
+        if len(result) > 4000:
+            result = result[:3996] + "\n..."
+        return result

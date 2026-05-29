@@ -24,7 +24,7 @@
 执行验证前，必须读取以下全部文件：
 
 **源码**
-- `main.py`
+- `web_main.py` 或 `web/app.py`
 - `config.yaml`
 - `core/pipeline.py`
 - `core/context_manager.py`
@@ -623,16 +623,16 @@
 
 ---
 
-**K1. Monkey-patch 覆盖完整性**
+**K1. WebSocket 原生实现完整性（#170 已移除 monkey-patch）**
 
-检查目标：`web/bridge/__init__.py` 中 `install_web_bridge()` 是否替换了 `core/prompt_utils` 和 `core/ui` 中所有被 pipeline 调用的函数。
+检查目标：`core/prompt_utils.py` 和 `core/ui.py` 是否为 WebSocket 原生实现（#170 已移除 monkey-patch）。
 
 检查方法：
-1. 在 `core/prompt_utils.py` 中列出所有公开函数（`prompt_choice`、`prompt_yes_no`、`prompt_single`、`prompt_multiline`、`prompt_int`、`is_interactive`、`UserAbort`）
-2. 在 `core/ui.py` 中列出所有公开函数（`info`、`warn`、`success`、`error`、`hint`、`banner`、`section`、`divider`、`show_refine_block`、`show_param_suggestions`、`show_param_confirmed`、`show_braindump_intro`、`show_braindump_result`、`show_braindump_summary`、`show_name_candidates`、`show_completion`、`show_novel_list`、`ChapterProgress`）
-3. 确认 `install_web_bridge` 对以上每个名称都有 `setattr(module, name, web_func)` 替换
+1. 在 `core/prompt_utils.py` 中确认所有公开函数（`prompt_choice`、`prompt_yes_no`、`prompt_single`、`prompt_multiline`、`prompt_int`、`is_interactive`、`UserAbort`）直接通过 WebSocket 与前端通信，不依赖任何 monkey-patch 替换
+2. 在 `core/ui.py` 中确认所有公开函数（`info`、`warn`、`success`、`error`、`hint`、`banner`、`section`、`divider`、`show_refine_block`、`show_param_suggestions`、`show_param_confirmed`、`show_braindump_intro`、`show_braindump_result`、`show_braindump_summary`、`show_name_candidates`、`show_completion`、`show_novel_list`、`ChapterProgress`）直接通过 WebSocket 推送前端
+3. 确认 `web/bridge/__init__.py` 不存在 `install_web_bridge()` 函数（已由 #170 移除）
 
-通过条件：所有公开函数/类均被替换；`core/llm_client.Spinner` 被替换为空操作
+通过条件：`core/prompt_utils.py` 和 `core/ui.py` 均为 WebSocket 原生实现，无 monkey-patch 残留
 
 ---
 

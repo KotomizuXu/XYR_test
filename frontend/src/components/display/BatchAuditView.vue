@@ -35,6 +35,13 @@ defineProps<{ data: any }>()
         ⚠️ {{ w.detail || w }}
       </div>
     </div>
+    <!-- 关系网络摘要 -->
+    <div v-if="data.relationship_summary && data.relationship_summary.length" class="audit-section">
+      <h4>关系网络变化</h4>
+      <div v-for="(rel, idx) in data.relationship_summary" :key="idx" class="relationship-item">
+        🔗 {{ rel }}
+      </div>
+    </div>
   </div>
 </template>
 
@@ -59,4 +66,5 @@ defineProps<{ data: any }>()
 .tension-bar.low { background: #70c0e8; }
 .ch-num { font-size: 10px; color: rgba(255,255,255,0.4); }
 .pacing-warn { font-size: 12px; color: #d0a000; margin-top: 4px; }
+.relationship-item { padding: 4px 10px; margin-bottom: 4px; border-radius: 6px; font-size: 13px; background: rgba(120,120,140,0.12); }
 </style>

@@ -31,7 +31,7 @@ const PHASE_ORDER = [
 
 const phaseLabel: Record<string, string> = {
   styling: '风格分析', collecting_params: '参数确认', directing: '导演阶段',
-  plotting: '剧情拆章', writing: '章节进度', complete: '已完成',
+  plotting: '剧情拆章', writing: '章节进度', editing: '润色进度', complete: '已完成',
 }
 
 const STAGE_STEPS = ['drafted', 'reviewed', 'tracked', 'edited']
@@ -231,7 +231,7 @@ watch(hasSession, (active) => {
 })
 
 const displayMessages = computed(() =>
-  store.outputMessages.filter(m => !['param_suggestions', 'novel_list'].includes(m.data.kind))
+  store.outputMessages.filter(m => m.data.kind !== 'param_suggestions')
 )
 
 const lastParamSuggestions = computed(() => {

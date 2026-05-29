@@ -105,10 +105,6 @@ def show_completion(novel_name, final_dir):
     _send_output("completion", novel_name=novel_name, final_dir=str(final_dir))
 
 
-def show_novel_list(rows):
-    _send_output("novel_list", rows=rows)
-
-
 # ---------------------------------------------------------------------------
 # 大纲审计（Plotting 阶段 Engine A→D 输出）
 # ---------------------------------------------------------------------------

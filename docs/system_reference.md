@@ -887,7 +887,7 @@ while not review.get("approved", False) and retries < max_retries:
     ...
 ```
 
-`max_retries = config["novel"]["review_max_retries"]` 默认 **3**（I2 硬上限调整：2 → 3）。循环最多 3 次后退出，**不会无限循环**；到上限后 `ch.review_status = "needs_revision"`，UI 输出"已达 review_max_retries=3 上限（I2 硬上限），接受当前版本进入下一阶段"。
+`max_retries = config["novel"]["review_max_retries"]` 默认 **2**（#184 从 3 降为 2）。循环最多 2 次后退出，**不会无限循环**；到上限后 `ch.review_status = "needs_revision"`，UI 输出"已达 review_max_retries=2 上限，接受当前版本进入下一阶段"。
 
 退出后逻辑：
 ```python
@@ -895,7 +895,7 @@ if review.get("approved", False):
     ch.review_status = "passed"
 else:
     ch.review_status = "needs_revision"
-    print("达到最大重试次数，接受当前版本")
+    ui.warn("达到最大重试次数，接受当前版本")
 ```
 
 **结论**：✅ 安全，有兜底。
@@ -1072,14 +1072,14 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 
 > **本节字典内容已迁移至 `docs/parameters_and_changelog.md`**：
 > - `_BANNED_REPLACEMENTS` / `_EMPTY_PHRASES` / `_ABSTRACT_NOUNS` / `_CLICHE_PAIRS` → `parameters_and_changelog.md` 第七章「程序化检查规则」
-> - `_GENRE_STRICTNESS` → `parameters_and_changelog.md` 第五章「审核严格度」
+> - `_GENRE_STRICTNESS` → `parameters_and_changelog.md` 第五章「审核严格度」（已从 pipeline.py 硬编码迁移至 config.yaml `genre_strictness` 段，#210）
 > - `_FIELD_MEANINGS`（~130 条完整列表）→ `parameters_and_changelog.md` 第九章「tracking_changes.csv 字段映射」
 > - `_TRACKING_FILES` → `parameters_and_changelog.md` 第八章
 >
 > **同步维护要求**（保留在此处）：
 > - 新增 `_BANNED_REPLACEMENTS` → 5 处同步（tracker.py + writer / editor / reviewer / style_advisor prompt）
 > - 新增 `_CLICHE_PAIRS` → 3 处同步（tracker.py + reviewer prompt + editor prompt）
-> - 新增 `_GENRE_STRICTNESS` → 检查 style_advisor_system.txt 题材关键词是否覆盖
+> - 新增 `_GENRE_STRICTNESS` → 检查 style_advisor_system.txt 题材关键词是否覆盖（已迁移至 config.yaml `genre_strictness`，#210）
 > - 新增追踪字段 → 同步 `_FIELD_MEANINGS`，否则 CSV 含义列为空
 > - 新增追踪文件 → 5 处同步（`_TRACKING_FILES` + `init_tracking` + `get_tracking_context` + `_consume_review` / `update_tracking` + `disabled_checks`）
 
@@ -1118,7 +1118,6 @@ words_min > words_max → prompt_int(min_val=words_min) 保证 max ≥ min
 | 参数 | `show_param_suggestions / show_param_confirmed` | _collect_params 的建议表 + 确认表 |
 | 章节 | `ChapterProgress` 类 | 通过 WebSocket 推送进度事件（start/update/chapter_done） |
 | 完成 | `show_completion(novel_name, final_dir)` | Phase 5 完成提示 |
-| 列表 | `show_novel_list(rows)` | 小说项目列表 |
 | 消息 | `info / warn / success / error / hint` | 滚动输出 |
 
 ### 19.3 pipeline.py 输出点全览

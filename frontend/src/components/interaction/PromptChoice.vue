@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { InputRequest } from '../../store'
 
 const props = defineProps<{ request: InputRequest }>()
 const emit = defineEmits<{ respond: [value: string] }>()
+const customValue = ref('')
+const showCustom = ref(false)
 </script>
 
 <template>
@@ -18,6 +21,31 @@ const emit = defineEmits<{ respond: [value: string] }>()
       >
         {{ opt.label }}
       </n-button>
+      <template v-if="props.request.data.allow_custom">
+        <n-button
+          v-if="!showCustom"
+          block
+          dashed
+          @click="showCustom = true"
+        >
+          自定义输入...
+        </n-button>
+        <template v-else>
+          <n-input
+            v-model:value="customValue"
+            placeholder="请输入自定义选项"
+            @keyup.enter="customValue && emit('respond', customValue)"
+          />
+          <n-button
+            type="primary"
+            block
+            :disabled="!customValue"
+            @click="emit('respond', customValue)"
+          >
+            确认自定义
+          </n-button>
+        </template>
+      </template>
     </n-space>
   </div>
 </template>

@@ -14,6 +14,7 @@ from agents.director import DirectorAgent
 from agents.editor import EditorAgent
 from agents.outline_auditor import OutlineAuditor
 from agents.outline_global_checker import OutlineGlobalChecker
+from agents.plotter import BATCH_SIZE as PLOTTER_BATCH_SIZE
 from agents.plotter import PlotAgent
 from agents.reviewer import ReviewerAgent
 from agents.style_advisor import StyleAdvisorAgent
@@ -24,12 +25,10 @@ from core.prompt_utils import (
     UserAbort, prompt_choice, prompt_int, prompt_multiline, prompt_single, prompt_yes_no,
 )
 from core.refine_prompts import (
-    REFINE_WORLD_PROMPT, REFINE_CHARACTER_PROMPT,
-    REFINE_LOCATION_PROMPT, REFINE_OUTLINE_PROMPT,
     REFINE_HOLISTIC_PROMPT, REFINE_STYLE_PROMPT,
     REFINE_REWRITE_DIRECTIVE,
 )
-from core.state_manager import ChapterState, NovelState, StateManager, atomic_write_json
+from core.state_manager import ChapterState, NovelState, StateManager, VolumeDef, atomic_write_json
 from core.tracker import Tracker
 from core import ui
 
@@ -71,6 +70,7 @@ class NovelPipeline:
 
         self._interrupted = False
         self._current_state = None
+        self._build_genre_strictness()
         try:
             signal.signal(signal.SIGINT, self._handle_interrupt)
         except (ValueError, OSError):
@@ -90,8 +90,6 @@ class NovelPipeline:
             "capability_extractor": self.capability_extractor,
             "outline_auditor": self.outline_auditor,
             "outline_global_checker": self.outline_global_checker,
-            "style_advisor": self.style_advisor,
-            "critic": self.critic,
         }
         for name, temp in style_guide["agent_temperatures"].items():
             if name in agent_map and isinstance(temp, (int, float)):
@@ -186,69 +184,98 @@ class NovelPipeline:
             logger.error(f"Pipeline error: {e}")
             raise
 
-    # 题材 → 审核严格度映射
-    _GENRE_STRICTNESS = {
-        "悬疑": "strict", "推理": "strict", "历史": "strict", "严肃": "strict", "科幻": "strict",
-        "爽文": "flexible", "复仇": "flexible", "言情": "flexible", "甜文": "flexible",
-        "虐文": "flexible", "网文": "flexible", "玄幻": "flexible", "仙侠": "flexible",
-        "武侠": "flexible", "奇幻": "flexible", "都市": "flexible",
-    }
+    # 题材 → 审核严格度映射（从 config.yaml genre_strictness 构建）
+    _GENRE_STRICTNESS: dict[str, str] = {}
+
+    def _build_genre_strictness(self) -> None:
+        cfg = self.config.get("genre_strictness", {})
+        result = {}
+        for level, keywords in cfg.items():
+            for kw in keywords:
+                result[kw] = level
+        self._GENRE_STRICTNESS = result
 
     def _run_pipeline(self, state: NovelState) -> None:
         self._current_state = state
 
         # Phase 0: Styling
         if state.phase == "styling":
-            style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
+            try:
+                style_desc = state.style_description or "传统文学风格，注重文笔和人物塑造"
 
-            # 断点恢复：已有风格指南则直接进入精修，无需重新生成
-            if not state.style_guide:
-                ui.info(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
-                state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
+                # 断点恢复：已有风格指南则直接进入精修，无需重新生成
                 if not state.style_guide:
-                    ui.error("[风格顾问] 生成失败，请重试")
+                    ui.info(f"[风格顾问] 正在根据风格描述生成指南：{style_desc}")
+                    state.style_guide = self.style_advisor.run(style_desc, story_idea=state.story_idea)
+                    if not state.style_guide:
+                        ui.error("[风格顾问] 生成失败，请重试")
+                        return
+                    self.state_mgr.save(state)
+
+                ui.section("风格指南确认", state.style_guide.get("style_name", "?"))
+
+                def _save_style(r):
+                    state.style_guide = r
+                    self.state_mgr.save(state)
+
+                refined_style = self._refine_block(
+                    label="风格指南",
+                    initial=state.style_guide,
+                    system_prompt=REFINE_STYLE_PROMPT,
+                    context_summary=self._build_style_context(state),
+                    on_update=_save_style,
+                )
+                if self._interrupted:
+                    state.style_guide = refined_style
+                    self.state_mgr.save(state)
+                    ui.hint("[中断] 风格指南调整已保存，恢复后可继续精修")
                     return
-                self.state_mgr.save(state)
 
-            ui.section("风格指南确认", state.style_guide.get("style_name", "?"))
-
-            def _save_style(r):
-                state.style_guide = r
-                self.state_mgr.save(state)
-
-            refined_style = self._refine_block(
-                label="风格指南",
-                initial=state.style_guide,
-                system_prompt=REFINE_STYLE_PROMPT,
-                context_summary=self._build_style_context(state),
-                on_update=_save_style,
-            )
-            if self._interrupted:
                 state.style_guide = refined_style
+                self._apply_style_temperatures(state.style_guide)
+                self._apply_strictness(state)
+                state.phase = "collecting_params"
                 self.state_mgr.save(state)
-                ui.hint("[中断] 风格指南调整已保存，恢复后可继续精修")
-                return
-
-            state.style_guide = refined_style
-            self._apply_style_temperatures(state.style_guide)
-            self._apply_strictness(state)
-            state.phase = "collecting_params"
-            self.state_mgr.save(state)
-            ui.success(f"[风格顾问] 风格指南已确认：{state.style_guide.get('style_name', '?')}")
+                ui.success(f"[风格顾问] 风格指南已确认：{state.style_guide.get('style_name', '?')}")
+            except Exception as e:
+                logger.error(f"Styling phase error: {e}")
+                self.state_mgr.save(state)
+                ui.error("风格分析阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("styling", e) from e
 
         if self._interrupted:
             return
 
         # Phase 0.5: Collect params
         if state.phase == "collecting_params":
-            self._collect_params(state)
+            try:
+                self._collect_params(state)
+            except Exception as e:
+                logger.error(f"Collecting params phase error: {e}")
+                self.state_mgr.save(state)
+                ui.error("参数收集阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("collecting_params", e) from e
 
         if self._interrupted:
             return
 
+        # 兼容旧 state：refining 已合并入 directing
+        if state.phase == "refining":
+            state.phase = "directing"
+            self.state_mgr.save(state)
+
         # Phase 1: Directing (一次性生成 + 全量精修)
         if state.phase == "directing":
-            self._run_directing_holistic(state)
+            try:
+                self._run_directing_holistic(state)
+            except Exception as e:
+                logger.error(f"Directing phase error: {e}")
+                self.state_mgr.save(state)
+                ui.error("导演阶段出错")
+                ui.hint("进度已保存，可在 Web 界面重新运行以恢复")
+                raise _PhaseHandledError("directing", e) from e
 
         if self._interrupted:
             return
@@ -394,7 +421,6 @@ class NovelPipeline:
             self._combine_final(state)
             state.phase = "complete"
             self.state_mgr.save(state)
-            from pathlib import Path
             ui.show_completion(state.novel_name, Path(f"output/{state.novel_name}/final/"))
 
     def _collect_params(self, state: NovelState) -> None:
@@ -485,7 +511,6 @@ class NovelPipeline:
 
     def _collect_volume_definitions(self, total_chapters: int, story_idea: str) -> list:
         """通过 LLM 建议分卷方案，用户确认/调整后返回 VolumeDef 列表。"""
-        from core.state_manager import VolumeDef
         import re
         ui.section("分卷规划", style="cyan")
         ui.info(f"共 {total_chapters} 章，正在生成分卷建议...")
@@ -595,7 +620,7 @@ class NovelPipeline:
             })
             cursor = end + 1
             if cursor > total_chapters and idx < n - 1:
-                # 区间已用完但还有卷没分配 → 丢弃多余卷
+                ui.warn(f"[分卷] 章节区间已用完，剩余 {n - 1 - idx} 卷未分配，已自动截断")
                 break
         return fixed
 
@@ -759,7 +784,7 @@ class NovelPipeline:
         max_retries = audit_cfg.get("audit_max_retries", 2)
         stale_threshold = audit_cfg.get("stale_similarity_threshold", 0.92)
         auto_rewrite = audit_cfg.get("auto_rewrite", True)
-        batch_size = 5
+        batch_size = audit_cfg.get("batch_size", PLOTTER_BATCH_SIZE)
 
         novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
         ch_range = f"{batch[0].get('chapter_number', '?')}-{batch[-1].get('chapter_number', '?')}"
@@ -865,12 +890,14 @@ class NovelPipeline:
                 "unapproved_count": len(still_unapproved),
                 "audits": audits,
             }
-            self._refine_block(
+            refined_summary = self._refine_block(
                 label=f"大纲审计结果（第 {ch_range} 章）",
                 initial=audit_summary,
                 system_prompt=self.outline_auditor.system_prompt,
                 context_summary=json.dumps(audit_summary, ensure_ascii=False, indent=2),
             )
+            if isinstance(refined_summary, dict) and "audits" in refined_summary:
+                audits = refined_summary["audits"]
 
         # 保存本批审计结果
         state.chapter_audits.extend(audits)
@@ -940,419 +967,6 @@ class NovelPipeline:
         state.phase = "plotting"
         self.state_mgr.save(state)
         ui.success("[导演] 全部确认，进入剧情拆章")
-
-    # ── Incremental Directing (Phase 1, 已弃用，保留兼容) ────────────────
-
-    def _run_incremental_directing(self, state: NovelState) -> None:
-        """Phase 1: 按层级增量生成世界观、角色、地点、大纲，每个 piece 生成后精修确认。"""
-        ui.banner("导演阶段", "逐层构建世界观、角色、地点和大纲")
-
-        # 向后兼容：如果 world_data 已有完整角色/地点但没有 planned_cast，
-        # 说明是旧 state（旧 Director 一次性生成了全部），走旧精修流程
-        if state.world_data and state.world_data.get("characters") and not state.world_data.get("planned_cast"):
-            ui.hint("[兼容] 检测到旧版一次性生成数据，走精修流程")
-            self._refine_director_output(state)
-            return
-
-        if not self._checkpoint(state, "构建世界观（耗时较长）"):
-            return
-
-        # --- Step 1: 生成+精修世界观 ---
-        if "world" not in state.refined_blocks:
-            if not state.world_data:
-                ui.info("[导演] 正在生成世界观...")
-                result = self.director.run_world(
-                    state.story_idea, state.total_chapters, style_guide=state.style_guide)
-                state.world_data = result
-                self.state_mgr.save(state)
-
-            wd = state.world_data or {}
-            world_block = {k: v for k, v in wd.items()
-                           if k not in ("characters", "locations")}
-            context = self._build_incremental_context(state, exclude="world")
-            refined = self._refine_block(
-                label="世界观", initial=world_block,
-                system_prompt=REFINE_WORLD_PROMPT, context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.world_data.update(refined)
-                    self.state_mgr.save(state)
-                return
-            for k in list(state.world_data.keys()):
-                if k not in ("characters", "locations", "planned_cast", "planned_locations"):
-                    state.world_data.pop(k, None)
-            if isinstance(refined, dict):
-                state.world_data.update(refined)
-            state.refined_blocks.append("world")
-            self.state_mgr.save(state)
-
-        if self._interrupted:
-            return
-
-        # --- Step 2: 逐个生成+精修角色 ---
-        planned = list(state.world_data.get("planned_cast", []))
-        if not planned and state.world_data.get("characters"):
-            planned = [{"name": c.get("name"), "role": c.get("role"), "brief": ""}
-                       for c in state.world_data["characters"] if isinstance(c, dict)]
-        state.world_data.setdefault("characters", [])
-
-        for idx, hint in enumerate(planned):
-            if not isinstance(hint, dict):
-                continue
-            name = hint.get("name") or f"角色{idx + 1}"
-            tag = f"character:{name}"
-            if tag in state.refined_blocks:
-                ui.hint(f"[恢复] 跳过角色「{name}」（已确认）")
-                continue
-
-            chars = state.world_data["characters"]
-            while len(chars) <= idx:
-                chars.append(None)
-
-            if chars[idx] is None:
-                ui.info(f"[导演] 正在生成角色「{name}」...")
-                context_json = self._build_director_context_json(state)
-                char_data = self.director.run_character(hint, context_json, state.style_guide)
-                if not isinstance(char_data, dict) or not char_data:
-                    ui.warn(f"角色「{name}」生成失败，跳过")
-                    continue
-                chars[idx] = char_data
-                self.state_mgr.save(state)
-
-            context = self._build_incremental_context(state)
-            refined = self._refine_block(
-                label=f"核心角色：{name}", initial=chars[idx],
-                system_prompt=REFINE_CHARACTER_PROMPT, context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.world_data["characters"][idx] = refined
-                    self.state_mgr.save(state)
-                return
-            if isinstance(refined, dict):
-                state.world_data["characters"][idx] = refined
-            state.refined_blocks.append(tag)
-            self.state_mgr.save(state)
-
-        if self._interrupted:
-            return
-
-        # --- Step 3: 逐个生成+精修地点 ---
-        planned_locs = list(state.world_data.get("planned_locations", []))
-        if not planned_locs and state.world_data.get("locations"):
-            planned_locs = [{"name": l.get("name"), "type": l.get("type"), "brief": ""}
-                           for l in state.world_data["locations"] if isinstance(l, dict)]
-        state.world_data.setdefault("locations", [])
-
-        for idx, hint in enumerate(planned_locs):
-            if not isinstance(hint, dict):
-                continue
-            name = hint.get("name") or f"地点{idx + 1}"
-            tag = f"location:{name}"
-            if tag in state.refined_blocks:
-                ui.hint(f"[恢复] 跳过地点「{name}」（已确认）")
-                continue
-
-            locs = state.world_data["locations"]
-            while len(locs) <= idx:
-                locs.append(None)
-
-            if locs[idx] is None:
-                ui.info(f"[导演] 正在生成地点「{name}」...")
-                context_json = self._build_director_context_json(state)
-                loc_data = self.director.run_location(hint, context_json, state.style_guide)
-                if not isinstance(loc_data, dict) or not loc_data:
-                    ui.warn(f"地点「{name}」生成失败，跳过")
-                    continue
-                locs[idx] = loc_data
-                self.state_mgr.save(state)
-
-            context = self._build_incremental_context(state)
-            refined = self._refine_block(
-                label=f"场景地点：{name}", initial=locs[idx],
-                system_prompt=REFINE_LOCATION_PROMPT, context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.world_data["locations"][idx] = refined
-                    self.state_mgr.save(state)
-                return
-            if isinstance(refined, dict):
-                state.world_data["locations"][idx] = refined
-            state.refined_blocks.append(tag)
-            self.state_mgr.save(state)
-
-        if self._interrupted:
-            return
-
-        # --- Step 4: 生成+精修大纲 ---
-        if "outline" not in state.refined_blocks:
-            if not state.outline:
-                ui.info("[导演] 正在生成大纲...")
-                context_json = self._build_director_context_json(state)
-                outline_data = self.director.run_outline(
-                    state.story_idea, state.total_chapters,
-                    context_json, state.style_guide, volumes=state.volumes)
-                state.outline = outline_data if isinstance(outline_data, dict) else {}
-                self.state_mgr.save(state)
-
-            context = self._build_incremental_context(state, exclude="outline")
-            refined = self._refine_block(
-                label="大纲（主题、三幕、关键转折）", initial=state.outline,
-                system_prompt=REFINE_OUTLINE_PROMPT, context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.outline = refined
-                    self.state_mgr.save(state)
-                return
-            if isinstance(refined, dict):
-                state.outline = refined
-            state.refined_blocks.append("outline")
-            self.state_mgr.save(state)
-
-        if self._interrupted:
-            return
-
-        # --- Step 5: 收尾 ---
-        state.world_data.pop("planned_cast", None)
-        state.world_data.pop("planned_locations", None)
-
-        novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
-        world_for_disk = {k: v for k, v in state.world_data.items() if k not in ("characters", "locations")}
-        world_for_disk["characters"] = state.world_data.get("characters", [])
-        world_for_disk["locations"] = state.world_data.get("locations", [])
-        atomic_write_json(novel_dir / "world.json", world_for_disk)
-        atomic_write_json(novel_dir / "outline.json", state.outline)
-
-        state.phase = "plotting"
-        self.state_mgr.save(state)
-        ui.success("[导演] 全部确认，进入剧情拆章")
-
-    def _build_director_context_json(self, state: NovelState) -> str:
-        """为 Director 增量生成构建完整已确认上下文的 JSON 字符串。"""
-        parts = {}
-        wd = state.world_data or {}
-        world_part = {k: v for k, v in wd.items()
-                      if k not in ("characters", "locations", "planned_cast", "planned_locations")}
-        if world_part:
-            parts["world"] = world_part
-        confirmed_chars = [c for c in wd.get("characters", []) if isinstance(c, dict)]
-        if confirmed_chars:
-            parts["characters"] = confirmed_chars
-        confirmed_locs = [l for l in wd.get("locations", []) if isinstance(l, dict)]
-        if confirmed_locs:
-            parts["locations"] = confirmed_locs
-        return json.dumps(parts, ensure_ascii=False, indent=2)
-
-    def _build_incremental_context(self, state: NovelState, exclude: str = "") -> str:
-        """为增量精修构建上下文，包含所有已确认数据（不剥离角色/地点）。"""
-        parts: list[str] = []
-        if state.story_idea:
-            idea = state.story_idea.replace("\n", " ")
-            parts.append(f"## 故事火花\n{idea[:1000]}")
-        if state.style_description:
-            parts.append(f"## 风格偏好\n{state.style_description}")
-        if exclude != "world" and state.world_data:
-            wd = state.world_data
-            brief = {k: v for k, v in wd.items()
-                     if k not in ("characters", "locations", "planned_cast", "planned_locations")}
-            if brief:
-                parts.append(f"## 已确认世界观（参考，不必修改）\n{json.dumps(brief, ensure_ascii=False)[:4000]}")
-        confirmed_chars = [c for c in (state.world_data or {}).get("characters", []) if isinstance(c, dict)]
-        if confirmed_chars:
-            parts.append(f"## 已确认角色（保持一致）\n{json.dumps(confirmed_chars, ensure_ascii=False)[:4000]}")
-        confirmed_locs = [l for l in (state.world_data or {}).get("locations", []) if isinstance(l, dict)]
-        if confirmed_locs:
-            parts.append(f"## 已确认地点（保持一致）\n{json.dumps(confirmed_locs, ensure_ascii=False)[:3000]}")
-        if exclude != "outline" and state.outline:
-            parts.append(f"## 当前大纲（参考）\n{json.dumps(state.outline, ensure_ascii=False)[:3000]}")
-        return "\n\n".join(parts)
-
-    # ── Refining (Phase 1.5, 旧流程向后兼容) ────────────────────────────
-
-    def _refine_director_output(self, state: NovelState) -> None:
-        """Phase 1.5: 让用户分块打磨 Director 输出的世界观 / 角色卡 / 地点卡 / 大纲。
-
-        每个 block 走 "是 / 调整 / 重写" 三选一循环（参考 braindump）。
-        已确认的 block 名追加到 state.refined_blocks，断点续传时自动跳过。
-        """
-        ui.banner("精修阶段", "打磨 AI 生成的世界观、角色、地点和大纲")
-        ui.hint("每个 block 都可以选择：确认 / 输入调整意见 / 整块重写")
-
-        if state.refined_blocks:
-            ui.hint(f"[恢复] 已确认 {len(state.refined_blocks)} 个 block：{state.refined_blocks}")
-
-        self._refine_world(state)
-        if self._interrupted:
-            return
-
-        self._refine_characters(state)
-        if self._interrupted:
-            return
-
-        self._refine_locations(state)
-        if self._interrupted:
-            return
-
-        self._refine_outline(state)
-        if self._interrupted:
-            return
-
-        # 全部完成 → 持久化新版本，推进到 plotting
-        novel_dir = self.state_mgr.get_novel_dir(state.novel_name)
-        world_for_disk = {k: v for k, v in state.world_data.items() if k not in ("characters", "locations")}
-        world_for_disk["characters"] = state.world_data.get("characters", [])
-        world_for_disk["locations"] = state.world_data.get("locations", [])
-        atomic_write_json(novel_dir / "world.json", world_for_disk)
-        atomic_write_json(novel_dir / "outline.json", state.outline)
-
-        state.phase = "plotting"
-        self.state_mgr.save(state)
-        ui.success("[精修] 全部确认，进入剧情拆章")
-
-    def _build_refine_context(self, state: NovelState, exclude: str = "") -> str:
-        """组装精修阶段共用的上下文（故事火花 + 风格 + 简要全局状态）。"""
-        parts: list[str] = []
-        if state.story_idea:
-            idea = state.story_idea.replace("\n", " ")
-            parts.append(f"## 故事火花\n{idea[:1000]}")
-        if state.style_description:
-            parts.append(f"## 风格偏好\n{state.style_description}")
-        if exclude != "world":
-            wd = state.world_data or {}
-            brief = {k: v for k, v in wd.items() if k not in ("characters", "locations")}
-            parts.append(f"## 当前世界观（参考，不必修改）\n{json.dumps(brief, ensure_ascii=False)[:2000]}")
-        if exclude != "outline" and state.outline:
-            parts.append(f"## 当前大纲（参考）\n{json.dumps(state.outline, ensure_ascii=False)[:1500]}")
-        return "\n\n".join(parts)
-
-    def _refine_world(self, state: NovelState) -> None:
-        if "world" in state.refined_blocks:
-            ui.hint("[恢复] 跳过世界观（已确认）")
-            return
-        wd = state.world_data or {}
-        world_block = {k: v for k, v in wd.items() if k not in ("characters", "locations")}
-        if not world_block:
-            ui.hint("世界观为空，跳过精修")
-            state.refined_blocks.append("world")
-            self.state_mgr.save(state)
-            return
-
-        context = self._build_refine_context(state, exclude="world")
-        refined = self._refine_block(
-            label="世界观",
-            initial=world_block,
-            system_prompt=REFINE_WORLD_PROMPT,
-            context_summary=context,
-        )
-        if self._interrupted:
-            if isinstance(refined, dict):
-                state.world_data.update(refined)
-                self.state_mgr.save(state)
-            return
-        # 写回 state.world_data，保留 characters / locations
-        for k in list(state.world_data.keys()):
-            if k not in ("characters", "locations"):
-                state.world_data.pop(k, None)
-        if isinstance(refined, dict):
-            state.world_data.update(refined)
-        state.refined_blocks.append("world")
-        self.state_mgr.save(state)
-
-    def _refine_characters(self, state: NovelState) -> None:
-        chars = (state.world_data or {}).get("characters", []) or []
-        if not chars:
-            ui.hint("无角色卡，跳过角色精修")
-            return
-        for idx, char in enumerate(chars):
-            if not isinstance(char, dict):
-                continue
-            name = char.get("name") or f"角色{idx + 1}"
-            tag = f"character:{name}"
-            if tag in state.refined_blocks:
-                ui.hint(f"[恢复] 跳过角色「{name}」（已确认）")
-                continue
-            context = self._build_refine_context(state, exclude="")
-            # 注入"已确认的相邻角色"摘要
-            sibling_names = [c.get("name", "?") for j, c in enumerate(chars) if j != idx and isinstance(c, dict)]
-            if sibling_names:
-                context += f"\n\n## 其他角色（保持设定一致）\n{', '.join(sibling_names)}"
-            refined = self._refine_block(
-                label=f"核心角色：{name}",
-                initial=char,
-                system_prompt=REFINE_CHARACTER_PROMPT,
-                context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.world_data["characters"][idx] = refined
-                    self.state_mgr.save(state)
-                return
-            if isinstance(refined, dict):
-                state.world_data["characters"][idx] = refined
-            state.refined_blocks.append(tag)
-            self.state_mgr.save(state)
-
-    def _refine_locations(self, state: NovelState) -> None:
-        locs = (state.world_data or {}).get("locations", []) or []
-        if not locs:
-            ui.hint("无地点卡，跳过地点精修")
-            return
-        for idx, loc in enumerate(locs):
-            if not isinstance(loc, dict):
-                continue
-            name = loc.get("name") or f"地点{idx + 1}"
-            tag = f"location:{name}"
-            if tag in state.refined_blocks:
-                ui.hint(f"[恢复] 跳过地点「{name}」（已确认）")
-                continue
-            context = self._build_refine_context(state, exclude="")
-            sibling_names = [l.get("name", "?") for j, l in enumerate(locs) if j != idx and isinstance(l, dict)]
-            if sibling_names:
-                context += f"\n\n## 其他地点（保持设定一致）\n{', '.join(sibling_names)}"
-            refined = self._refine_block(
-                label=f"场景地点：{name}",
-                initial=loc,
-                system_prompt=REFINE_LOCATION_PROMPT,
-                context_summary=context,
-            )
-            if self._interrupted:
-                if isinstance(refined, dict):
-                    state.world_data["locations"][idx] = refined
-                    self.state_mgr.save(state)
-                return
-            if isinstance(refined, dict):
-                state.world_data["locations"][idx] = refined
-            state.refined_blocks.append(tag)
-            self.state_mgr.save(state)
-
-    def _refine_outline(self, state: NovelState) -> None:
-        if "outline" in state.refined_blocks:
-            ui.hint("[恢复] 跳过大纲（已确认）")
-            return
-        if not state.outline:
-            ui.hint("无大纲，跳过精修")
-            state.refined_blocks.append("outline")
-            self.state_mgr.save(state)
-            return
-        context = self._build_refine_context(state, exclude="outline")
-        refined = self._refine_block(
-            label="大纲（主题、三幕、关键转折）",
-            initial=state.outline,
-            system_prompt=REFINE_OUTLINE_PROMPT,
-            context_summary=context,
-        )
-        if self._interrupted:
-            if isinstance(refined, dict):
-                state.outline = refined
-                self.state_mgr.save(state)
-            return
-        if isinstance(refined, dict):
-            state.outline = refined
-        state.refined_blocks.append("outline")
-        self.state_mgr.save(state)
 
     def _refine_block(self, *, label: str, initial, system_prompt: str, context_summary: str,
                       on_update=None):
@@ -1559,6 +1173,9 @@ class NovelPipeline:
         strictness = tracker._get_strictness()
         level = "deep" if strictness == "strict" else "standard"
         rules = tracker._read_json("validation_rules.json")
+        if not rules or "validation_tasks" not in rules:
+            logger.warning("validation_rules.json not initialized, skipping level application")
+            return
         rules["active_validation_level"] = level
         tracker._write_json("validation_rules.json", rules)
 
@@ -1649,6 +1266,9 @@ class NovelPipeline:
             if self._interrupted:
                 return
 
+            if i >= len(state.chapter_plans) or i >= len(state.chapters):
+                ui.warn(f"[警告] 章节索引 {i} 超出范围（计划 {len(state.chapter_plans)} 章，状态 {len(state.chapters)} 章），跳过")
+                continue
             plan = state.chapter_plans[i]
             ch = state.chapters[i]
             ch_num = ch.chapter_number
@@ -1915,6 +1535,9 @@ class NovelPipeline:
             if self._interrupted:
                 return
 
+            if i >= len(state.chapters):
+                ui.warn(f"[警告] 编辑阶段章节索引 {i} 超出范围（共 {len(state.chapters)} 章），跳过")
+                continue
             ch = state.chapters[i]
             ch_num = ch.chapter_number
             ui.info(f"[编辑] 润色第 {ch_num}/{state.total_chapters} 章...")

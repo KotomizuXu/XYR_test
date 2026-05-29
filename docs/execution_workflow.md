@@ -229,7 +229,7 @@
 
 | 文档 | 角色 | 何时引用 |
 |------|------|---------|
-| `docs/execution_execution_workflow.md`（本文件）| 流程纲领 | **接到需求时第一份读** |
+| `docs/execution_workflow.md`（本文件）| 流程纲领 | **接到需求时第一份读** |
 | `docs/verification_protocol.md` | 28 项 AI 执行型验证清单 | 阶段 4 验证项 ⑤ 数据链路追溯时 |
 | `docs/parameters_and_changelog.md` | 参数 / 常量 / bug fix 历史的权威来源 | 阶段 5 同步矩阵首要目标 |
 | `docs/system_reference.md` | 字段链路（生成→消费）参考手册 | 阶段 3 改代码前查链路 / 阶段 5 同步 |
