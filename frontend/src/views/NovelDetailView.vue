@@ -10,6 +10,7 @@ import JsonViewer from '../components/display/JsonViewer.vue'
 import RefineBlockViewer from '../components/display/RefineBlockViewer.vue'
 import BatchAuditView from '../components/display/BatchAuditView.vue'
 import GlobalAuditView from '../components/display/GlobalAuditView.vue'
+import ChapterReviewView from '../components/display/ChapterReviewView.vue'
 
 const store = useNovelStore()
 const route = useRoute()
@@ -633,11 +634,18 @@ const directingContent = computed(() => {
                         <span v-if="i < STAGE_STEPS.length - 1" class="step-arrow">→</span>
                       </template>
                       <n-tag v-if="ch.revision_count > 0" size="tiny" type="warning" round>重写{{ ch.revision_count }}次</n-tag>
+                      <n-tag v-if="ch.review_notes" size="tiny" :bordered="false" :style="{ color: ch.review_notes.overall_quality >= 7 ? '#36ad6a' : ch.review_notes.overall_quality >= 5 ? '#d0a000' : '#d03030' }">质量 {{ ch.review_notes.overall_quality ?? '-' }}/10</n-tag>
+                      <n-tag v-if="ch.review_notes?.consistency_score != null" size="tiny" :bordered="false" :style="{ color: ch.review_notes.consistency_score >= 80 ? '#36ad6a' : ch.review_notes.consistency_score >= 50 ? '#d0a000' : '#d03030' }">一致性 {{ ch.review_notes.consistency_score }}%</n-tag>
                     </n-space>
                   </template>
                   <template #action>
                     <n-button size="small" @click="openChapterContent(ch)" :disabled="!ch.has_edited && !ch.has_draft">阅读</n-button>
                   </template>
+                  <n-collapse v-if="ch.review_notes" style="margin-top: 8px">
+                    <n-collapse-item title="审校详情" name="review">
+                      <ChapterReviewView :review="ch.review_notes" />
+                    </n-collapse-item>
+                  </n-collapse>
                 </n-thing>
               </n-list-item>
             </n-list>

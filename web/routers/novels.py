@@ -1,5 +1,6 @@
 """REST API：小说列表、详情、章节内容、回滚。"""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -97,6 +98,7 @@ async def get_novel_detail(novel_name: str):
                 "revision_count": ch.revision_count,
                 "has_draft": ch.draft_path is not None,
                 "has_edited": ch.edited_path is not None,
+                "review_notes": _parse_review_notes(ch.review_notes),
             }
             for ch in state.chapters
         ],
@@ -217,3 +219,13 @@ def _clean_dir(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _parse_review_notes(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        return result if isinstance(result, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None

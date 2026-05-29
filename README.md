@@ -236,6 +236,18 @@ Orchestra/
 
 ## 变更日志
 
+### 2026-05-29 审校环节静默跳过 bug 修复
+
+- **reviewer.py**：`chat_json` 返回 list 时不再 `approved=True` 放行，改为提取首元素或返回 `approved=False` 触发重试
+- **pipeline.py**：审核未通过但 issues 为空时不再直接接受，改为注入 fallback issue 让重写循环继续
+- 根因：LLM 偶尔返回 `[{...}]` 而非 `{...}`，导致审校被静默跳过
+
+### 2026-05-29 审校数据前端持久化展示
+
+- **后端 API**：`GET /api/novels/{name}` 新增 `review_notes` 字段，返回完整审校 JSON（八维评分、问题列表、一致性检查、追踪更新等）
+- **新组件 ChapterReviewView**：Writing Tab 每章卡片新增审校概览标签（质量分+一致性分）和折叠详情面板，展示全部审校数据
+- 改动文件：`web/routers/novels.py`、`ChapterReviewView.vue`（新建）、`NovelDetailView.vue`
+
 ### 2026-05-28 大纲审计改为「边拆边审」+ 持久化展示
 
 - **边拆边审重构**：原「全部拆完再统一审」改为 PlotAgent 每拆 5 章 → 立即审这 5 章 → 重写修正 → 修正版作为上下文喂给下一批拆分，保证前序章节的审计修正影响后续拆分

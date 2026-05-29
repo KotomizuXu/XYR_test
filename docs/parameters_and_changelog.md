@@ -999,3 +999,17 @@ fallback 计算（AI 未输出时）：角色=max(3, 总章数/3)，支线=max(4
 | #194 | 增强 | 原大纲审计是「全部拆完再统一审」，前 1-5 章经审计修正的版本无法影响后续章节拆分，违背「保证前序对后续影响」诉求 | `core/pipeline.py` — 抽 `_audit_one_batch(state, plans, batch_start, batch)`（搬原 `_run_outline_audit` 循环体），`_run_outline_audit` 瘦身改名 `_finalize_outline_audit`（只留 Engine D3+D4 全局检查 + 汇总）；`agents/plotter.py` — `on_batch_complete` 签名扩展为 `(all_plans, batch_start_idx, batch)`（L211/226 两处）；pipeline 用 `_on_batch` 闭包在每批拆完后调审计。**关键**：`_audit_one_batch` 的重写 splice 改回填**传入的 plans**（=plotter 的 all_plans 同一引用），下一批 `_build_existing_summaries(all_plans)` 自动带修正版 |
 | #195 | 中等 | 边拆边审下崩溃可能落在「拆完 save」与「审完 save」之间，导致尾部批次拆了但没审，plotter 按 `len(chapter_plans)` 续拆会静默跳过该批 | `core/pipeline.py` — plotting 阶段调 plotter.run 前对齐两线：`if len(chapter_plans) > len(chapter_audits): chapter_plans = chapter_plans[:audited_count]`，丢弃「拆了未审」尾部重拆+重审（≤5章代价）。审计异常在 `_on_batch` 内单独 try/except，不误判为拆章失败 |
 | #196 | 增强 | `batch_audits`/`global_audit` 后端已暴露但前端持久化页面零消费，刷新后看不到；MessageLog 内联渲染无法复用 | 新增 `frontend/src/components/display/BatchAuditView.vue` + `GlobalAuditView.vue`（迁移 MessageLog 内联渲染+样式）；MessageLog.vue 改为引用子组件；NovelDetailView plotting Tab 章节列表下方加批次/全局审计折叠区（消费 `detail.batch_audits`/`detail.global_audit`）+ 顶部加「查看大纲」入口（复用 RefineBlockViewer 渲染 `detail.outline`）；`_audit_one_batch` 持久化 batch_summary 时注入 `batch_range` 供前端标题展示 |
+
+### 2026-05-29 审校环节 LLM 返回异常时静默跳过修复
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #197 | 严重 | `reviewer.py` 当 `chat_json` 返回 list（如 `[{...}]`）而非 dict 时，直接返回 `approved=True` 放行，章节未经审核即进入下一阶段（`overall_quality=0` 自相矛盾） | `agents/reviewer.py:34-41` — list 首元素是 dict 时提取；否则返回 `approved=False` + 含解析错误信息的 issues，触发 pipeline 重试 |
+| #198 | 中等 | `pipeline.py` 审核未通过但 issues 为空时直接 break 接受，未给重写环节任何反馈 | `core/pipeline.py:1765-1769` — 构造通用 fallback issue（severity=major），让重写循环继续而非静默跳过 |
+
+### 2026-05-29 审校数据前端持久化展示
+
+| 编号 | 严重度 | 问题 | 修复位置 |
+|------|--------|------|----------|
+| #199 | 增强 | `review_notes` 包含八维评分、问题列表、一致性检查等完整审校数据，但 API 层完全未暴露，前端 Writing Tab 无法展示 | `web/routers/novels.py` — 新增 `_parse_review_notes()` 安全解析 JSON，`GET /api/novels/{name}` chapters 列表新增 `review_notes` 字段 |
+| #200 | 增强 | 前端 Writing Tab 只展示 4 步进度条，审校结果仅以纯文本闪现在 WebSocket 日志中，刷新即消失 | 新增 `frontend/src/components/display/ChapterReviewView.vue` — 结构化展示八维评分条、问题列表、一致性检查、亮点、自动修复建议、追踪更新；`NovelDetailView.vue` Writing Tab 章节卡片嵌入审校概览标签 + 折叠详情面板 |

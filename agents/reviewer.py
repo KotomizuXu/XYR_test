@@ -32,8 +32,13 @@ class ReviewerAgent(BaseAgent):
             system, user_msg, temperature=self._temperature()
         )
         if not isinstance(result, dict):
-            logger.error(f"Reviewer: expected dict from chat_json, got {type(result).__name__}")
-            return {"approved": True, "issues": [], "consistency_checks": {}, "overall_quality": 0,
+            if isinstance(result, list) and result and isinstance(result[0], dict):
+                logger.warning(f"Reviewer: got list from chat_json, extracting first element")
+                result = result[0]
+            else:
+                logger.error(f"Reviewer: expected dict from chat_json, got {type(result).__name__}: {str(result)[:200]}")
+                return {"approved": False, "issues": [{"severity": "major", "description": "审校结果解析异常（LLM 返回格式错误），请重新审核",
+                    "suggestion": "重新提交审核请求"}], "consistency_checks": {}, "overall_quality": 0,
                     "strengths": [], "auto_fix_suggestions": [], "tracking_updates": {}}
 
         approved = result.get("approved", False)

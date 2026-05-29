@@ -1763,8 +1763,10 @@ class NovelPipeline:
                 retries += 1
                 issues = review.get("issues", [])
                 if not issues:
-                    logger.warning(f"Review not approved but no issues listed, accepting as-is")
-                    break
+                    logger.warning(f"Review not approved but no issues listed, injecting fallback issue")
+                    issues = [{"severity": "major", "description": "审核未通过但未列出具体问题，可能存在整体质量问题",
+                               "suggestion": "请对全章进行全面审查，重点关注叙事逻辑、人物一致性和语言质量"}]
+                    review["issues"] = issues
                 major = [i for i in issues if i.get("severity") == "major"]
                 ui.warn(f"[审核] 发现 {len(major)} 个主要问题，第{retries}次重写...")
 
